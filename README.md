@@ -2,25 +2,24 @@
 
 A local Home Assistant integration for Inner Range Integriti using the REST API with **API-key-only authentication**.
 
-## v0.1.4
+## v0.1.5
 
-This release corrects generic XML door and area control targeting.
+This release fixes DoorAction and AreaAction target resolution on servers that expose doors and areas by addresses such as `D38` and `A47` but omit the long Integriti database object ID from the normal discovery response.
 
-### XML control fixes
+### Control fixes
 
-- Door and Area XML actions now use the Integriti database object ID, not an address such as `D38` or `A1`.
-- If the normal discovery response omits the database ID, the integration resolves it with a filtered query immediately before the first XML command and caches it.
-- XML control now tries the synchronous `/XML_Control` endpoint first, matching Integriti's generated REST command.
-- XML bodies are sent as `application/xml`.
-- The parser no longer mistakes `<Ref Type="Door">` or `<Ref Type="Area">` elements for full Door or Area records.
-- Diagnostics show `control_id`, `xml_control_id`, address, and state ID separately.
-
-### Controls
-
-- The lock entity uses normal `DoorAction` XML commands for lock, unlock, and grant access.
-- The override select alone uses persistent door overrides.
-- Area arm and disarm use normal `AreaAction` XML commands.
-- State refreshes run immediately and again after approximately 1, 3, and 7 seconds.
+- Database IDs are now resolved through several compatible API paths:
+  - Direct full-object lookup
+  - Address-filtered GET lookup
+  - The documented `GetFilteredEntities` AggregateExpression
+  - DoorState or AreaState entity references
+- Additional ID field names such as `EntityID`, `ObjectID`, and `DatabaseID` are recognised.
+- XML control now tries `/XML_ControlAsync` first so Integriti can report an unresolved or failed action instead of the integration accepting an immediate acknowledgement.
+- If a server does not expose the long object ID, the integration falls back to the alternate Address-based reference formats used by some Integriti serializers.
+- Grant Access uses the dedicated `/GrantAccess/{door}` endpoint first and sends an explicit XML content type and XML declaration.
+- Normal lock and unlock remain XML DoorActions; only the override select applies a persistent door override.
+- Area arm and disarm remain XML AreaActions.
+- State refreshes run immediately and again after approximately 1, 3, and 7 seconds after a successful command.
 
 ## Installation with HACS
 
@@ -58,7 +57,7 @@ Door override permissions are required only for the override select.
 
 ## Notes
 
-- Door lock/unlock and grant-access operations use XML actions.
+- Door lock and unlock operations use normal XML actions, not persistent overrides.
 - Persistent overrides are only applied from the door override select.
 - Integriti security Areas are represented as Home Assistant alarm-control-panel entities.
 - The API key is redacted from Home Assistant diagnostics.

@@ -31,3 +31,37 @@ def test_area_action_uses_database_object_id() -> None:
     assert ref.attrib == {"Type": "Area", "ID": "5066553875759200"}
     assert _text(root, "OnAssert") == "2"
     assert _text(root, "OnDeAssert") == "1"
+
+
+def test_door_action_can_use_address_reference() -> None:
+    root = ET.fromstring(
+        IntegritiClient._build_door_action(
+            None, address="D38", on_assert=2, on_deassert=1
+        )
+    )
+    ref = root.find("./Entity/Ref")
+    assert ref is not None
+    assert ref.attrib == {"Type": "Door", "Address": "D38"}
+
+
+def test_area_action_can_use_address_as_legacy_id() -> None:
+    root = ET.fromstring(
+        IntegritiClient._build_area_action(
+            None, address="A47", address_as_id=True, arm=True
+        )
+    )
+    ref = root.find("./Entity/Ref")
+    assert ref is not None
+    assert ref.attrib == {"Type": "Area", "ID": "A47"}
+
+
+def test_address_filter_matches_system_designer_shape() -> None:
+    root = ET.fromstring(IntegritiClient._build_address_filter("D38"))
+    assert root.attrib[
+        "{http://www.w3.org/2001/XMLSchema-instance}type"
+    ] == "AggregateExpression"
+    assert root.findtext("OperatorType") == "And"
+    expression = root.find("./SubExpressions/FilterExpression")
+    assert expression is not None
+    assert expression.findtext("PropertyName") == "Address"
+    assert expression.findtext("OperatorType") == "Equals"

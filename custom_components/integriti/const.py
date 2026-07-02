@@ -7,7 +7,7 @@ from typing import Final
 
 DOMAIN: Final = "integriti"
 NAME: Final = "Inner Range Integriti"
-VERSION: Final = "0.1.4"
+VERSION: Final = "0.1.5"
 
 CONF_API_KEY: Final = "api_key"
 CONF_API_PATH: Final = "api_path"

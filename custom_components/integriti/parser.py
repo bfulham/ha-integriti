@@ -278,6 +278,118 @@ def _reference_id_only(
     return None
 
 
+_OBJECT_ID_NAMES = (
+    "ID",
+    "Id",
+    "EntityID",
+    "EntityId",
+    "ObjectID",
+    "ObjectId",
+    "DatabaseID",
+    "DatabaseId",
+    "DBID",
+    "DbId",
+    "LongID",
+    "LongId",
+)
+
+
+def _object_id(node: ET.Element, *, expected_type: str) -> str | None:
+    """Return the database object ID from a full entity or entity reference."""
+    return (
+        _attribute(node, *_OBJECT_ID_NAMES)
+        or _direct_text(node, *_OBJECT_ID_NAMES)
+        or _reference_id_only(node, "Entity", expected_type=expected_type)
+        or _reference_id_only(node, expected_type, expected_type=expected_type)
+    )
+
+
+def extract_database_object_id(
+    xml: str, entity_type: str, address: str
+) -> str | None:
+    """Extract an entity database ID from an arbitrary filtered API response.
+
+    Integriti has several serializers in use across releases. Some return a full
+    ``Door``/``Area`` object, while others return a ``Ref`` or wrap the object in
+    a generic result. This helper deliberately accepts all of those shapes.
+    """
+    try:
+        root = ET.fromstring(xml)
+    except ET.ParseError:
+        return None
+
+    wanted_type = entity_type.casefold()
+    wanted_address = address.strip().casefold()
+
+    def usable(value: str | None) -> str | None:
+        value = _clean(value)
+        if value is None or value.casefold() == wanted_address:
+            return None
+        return value
+
+    # The most reliable shape is a Ref carrying both Address and ID.
+    for node in root.iter():
+        if _local_name(node.tag).casefold() != "ref":
+            continue
+        ref_type = _attribute(node, "Type")
+        if ref_type is None or ref_type.casefold() != wanted_type:
+            continue
+        ref_address = _attribute(node, "Address") or _direct_text(node, "Address")
+        if ref_address and ref_address.strip().casefold() == wanted_address:
+            if value := usable(_attribute(node, *_OBJECT_ID_NAMES)):
+                return value
+            if value := usable(_direct_text(node, *_OBJECT_ID_NAMES)):
+                return value
+
+    # Prefer a full entity row whose address matches exactly.
+    matching_rows: list[ET.Element] = []
+    all_rows = _rows(root, entity_type)
+    for row in all_rows:
+        row_address = (
+            _attribute(row, "Address", "EntityAddress")
+            or _direct_text(row, "Address", "EntityAddress")
+            or _reference_address(row, "Entity", expected_type=entity_type)
+        )
+        if row_address and row_address.strip().casefold() == wanted_address:
+            matching_rows.append(row)
+
+    for row in matching_rows:
+        if value := usable(_object_id(row, expected_type=entity_type)):
+            return value
+
+    # Some filtered responses omit the Address because it was the filter key.
+    # If exactly one entity row was returned, its object ID is unambiguous.
+    if len(all_rows) == 1:
+        if value := usable(_object_id(all_rows[0], expected_type=entity_type)):
+            return value
+
+    # Last resort: locate the exact address anywhere, then inspect its ancestors.
+    parent_map = {child: parent for parent in root.iter() for child in parent}
+    for node in root.iter():
+        has_address = any(
+            _local_name(key).casefold() in {"address", "entityaddress"}
+            and str(value).strip().casefold() == wanted_address
+            for key, value in node.attrib.items()
+        )
+        if not has_address and _local_name(node.tag).casefold() in {
+            "address",
+            "entityaddress",
+        }:
+            has_address = (node.text or "").strip().casefold() == wanted_address
+        if not has_address:
+            continue
+        current: ET.Element | None = node
+        while current is not None:
+            tag_name = _local_name(current.tag).casefold()
+            type_name = (_xsi_type(current) or "").casefold()
+            if tag_name == wanted_type or type_name == wanted_type:
+                if value := usable(_object_id(current, expected_type=entity_type)):
+                    return value
+            current = parent_map.get(current)
+
+    return None
+
+
 def _reference_address(
     node: ET.Element,
     property_name: str,
@@ -433,11 +545,7 @@ def parse_doors(xml: str) -> list[IntegritiDoor]:
             or _direct_text(item, "Address")
             or _reference_address(item, "Entity", expected_type="Door")
         )
-        object_id = (
-            _attribute(item, "ID", "Id")
-            or _direct_text(item, "ID", "Id")
-            or _reference_id_only(item, "Entity", expected_type="Door")
-        )
+        object_id = _object_id(item, expected_type="Door")
         unique_id = object_id or address
         if unique_id is None:
             continue
@@ -491,11 +599,7 @@ def parse_areas(xml: str) -> list[IntegritiArea]:
             or _direct_text(item, "Address")
             or _reference_address(item, "Entity", expected_type="Area")
         )
-        object_id = (
-            _attribute(item, "ID", "Id")
-            or _direct_text(item, "ID", "Id")
-            or _reference_id_only(item, "Entity", expected_type="Area")
-        )
+        object_id = _object_id(item, expected_type="Area")
         unique_id = object_id or address
         if unique_id is None:
             continue
@@ -552,7 +656,17 @@ def parse_door_states(xml: str) -> list[IntegritiDoorStatus]:
         roller_raw = _direct_text(item, "RollerState") or _text(item, "RollerState")
         entity_object_id = _reference_id_only(
             item, "Entity", expected_type="Door"
-        ) or _direct_text(item, "DoorID", "DoorId", "EntityID", "EntityId")
+        ) or _direct_text(
+            item,
+            "DoorID",
+            "DoorId",
+            "EntityID",
+            "EntityId",
+            "ObjectID",
+            "ObjectId",
+            "DatabaseID",
+            "DatabaseId",
+        )
         entity_address = _reference_address(
             item, "Entity", expected_type="Door"
         )
@@ -599,7 +713,17 @@ def parse_area_states(xml: str) -> list[IntegritiAreaStatus]:
         exit_raw = _direct_text(item, "ExitState") or _text(item, "ExitState")
         entity_object_id = _reference_id_only(
             item, "Entity", expected_type="Area"
-        ) or _direct_text(item, "AreaID", "AreaId", "EntityID", "EntityId")
+        ) or _direct_text(
+            item,
+            "AreaID",
+            "AreaId",
+            "EntityID",
+            "EntityId",
+            "ObjectID",
+            "ObjectId",
+            "DatabaseID",
+            "DatabaseId",
+        )
         entity_address = _reference_address(
             item, "Entity", expected_type="Area"
         )

@@ -1,4 +1,5 @@
 from custom_components.integriti.parser import (
+    extract_database_object_id,
     parse_area_states,
     parse_areas,
     parse_door_states,
@@ -190,3 +191,42 @@ def test_polymorphic_entity_state_still_uses_xsi_type() -> None:
     assert len(rows) == 1
     assert rows[0].entity_object_id == "5066553875759108"
     assert rows[0].address == "D38"
+
+
+def test_extract_database_object_id_from_ref_response() -> None:
+    xml = """
+    <Results Count="1">
+      <EntityState>
+        <Entity><Ref Type="Door" ID="5066553875759108" Address="D38" /></Entity>
+      </EntityState>
+    </Results>
+    """
+    assert (
+        extract_database_object_id(xml, "Door", "D38")
+        == "5066553875759108"
+    )
+
+
+def test_extract_database_object_id_from_filtered_full_object() -> None:
+    xml = """
+    <Results Count="1">
+      <Door>
+        <EntityID>5066553875759108</EntityID>
+        <Address>D38</Address>
+        <Name>Workshop Entry</Name>
+      </Door>
+    </Results>
+    """
+    assert (
+        extract_database_object_id(xml, "Door", "D38")
+        == "5066553875759108"
+    )
+
+
+def test_parse_entity_id_element_as_xml_control_id() -> None:
+    xml = """
+    <Results><Area><EntityID>4785078899048449</EntityID>
+      <Address>A47</Address><Name>Workshop</Name></Area></Results>
+    """
+    area = parse_areas(xml)[0]
+    assert area.xml_control_id == "4785078899048449"
