@@ -180,8 +180,10 @@ def _area_state(value: str | None) -> int | None:
 
 
 def _xsi_type(node: ET.Element) -> str | None:
+    """Return only an XML Schema Instance type, not a normal Type attribute."""
+    xsi_namespace = "http://www.w3.org/2001/XMLSchema-instance"
     for key, value in node.attrib.items():
-        if _local_name(key).casefold() == "type":
+        if key == f"{{{xsi_namespace}}}type" or key.casefold() == "xsi:type":
             return _clean(value.rsplit(":", 1)[-1])
     return None
 
@@ -231,6 +233,81 @@ def _reference_value(
             ref_type = _attribute(ref, "Type")
             if ref_type and ref_type.casefold() == expected:
                 value = _attribute(ref, "ID", "Id", "Address")
+                if value is not None:
+                    return value
+    return None
+
+
+
+def _reference_id_only(
+    node: ET.Element,
+    property_name: str,
+    *,
+    expected_type: str | None = None,
+) -> str | None:
+    """Return only the database ID from a serialized object reference."""
+    expected = expected_type.casefold() if expected_type else None
+    properties = list(_children(node, property_name))
+    for prop in properties:
+        direct = _attribute(prop, "ID", "Id")
+        if direct is not None:
+            return direct
+        for ref in prop.iter():
+            if _local_name(ref.tag).casefold() != "ref":
+                continue
+            ref_type = _attribute(ref, "Type")
+            if expected and ref_type and ref_type.casefold() != expected:
+                continue
+            value = _attribute(ref, "ID", "Id") or _direct_text(
+                ref, "ID", "Id"
+            )
+            if value is not None:
+                return value
+
+    if expected:
+        for ref in node.iter():
+            if _local_name(ref.tag).casefold() != "ref":
+                continue
+            ref_type = _attribute(ref, "Type")
+            if ref_type and ref_type.casefold() == expected:
+                value = _attribute(ref, "ID", "Id") or _direct_text(
+                    ref, "ID", "Id"
+                )
+                if value is not None:
+                    return value
+    return None
+
+
+def _reference_address(
+    node: ET.Element,
+    property_name: str,
+    *,
+    expected_type: str | None = None,
+) -> str | None:
+    """Return only the address from a serialized object reference."""
+    expected = expected_type.casefold() if expected_type else None
+    properties = list(_children(node, property_name))
+    for prop in properties:
+        direct = _attribute(prop, "Address")
+        if direct is not None:
+            return direct
+        for ref in prop.iter():
+            if _local_name(ref.tag).casefold() != "ref":
+                continue
+            ref_type = _attribute(ref, "Type")
+            if expected and ref_type and ref_type.casefold() != expected:
+                continue
+            value = _attribute(ref, "Address") or _direct_text(ref, "Address")
+            if value is not None:
+                return value
+
+    if expected:
+        for ref in node.iter():
+            if _local_name(ref.tag).casefold() != "ref":
+                continue
+            ref_type = _attribute(ref, "Type")
+            if ref_type and ref_type.casefold() == expected:
+                value = _attribute(ref, "Address") or _direct_text(ref, "Address")
                 if value is not None:
                     return value
     return None
@@ -351,8 +428,16 @@ def parse_doors(xml: str) -> list[IntegritiDoor]:
 
     result: list[IntegritiDoor] = []
     for item in _rows(root, "Door"):
-        address = _attribute(item, "Address") or _direct_text(item, "Address")
-        object_id = _attribute(item, "ID", "Id") or _direct_text(item, "ID", "Id")
+        address = (
+            _attribute(item, "Address")
+            or _direct_text(item, "Address")
+            or _reference_address(item, "Entity", expected_type="Door")
+        )
+        object_id = (
+            _attribute(item, "ID", "Id")
+            or _direct_text(item, "ID", "Id")
+            or _reference_id_only(item, "Entity", expected_type="Door")
+        )
         unique_id = object_id or address
         if unique_id is None:
             continue
@@ -365,6 +450,7 @@ def parse_doors(xml: str) -> list[IntegritiDoor]:
                 unique_id=unique_id,
                 address=address,
                 control_id=control_id,
+                xml_control_id=object_id,
                 name=_display_name(item, address, expected_type="Door"),
                 description=_direct_text(item, "Description", "Notes"),
                 controller_id=_reference_id(
@@ -400,8 +486,16 @@ def parse_areas(xml: str) -> list[IntegritiArea]:
 
     result: list[IntegritiArea] = []
     for item in _rows(root, "Area"):
-        address = _attribute(item, "Address") or _direct_text(item, "Address")
-        object_id = _attribute(item, "ID", "Id") or _direct_text(item, "ID", "Id")
+        address = (
+            _attribute(item, "Address")
+            or _direct_text(item, "Address")
+            or _reference_address(item, "Entity", expected_type="Area")
+        )
+        object_id = (
+            _attribute(item, "ID", "Id")
+            or _direct_text(item, "ID", "Id")
+            or _reference_id_only(item, "Entity", expected_type="Area")
+        )
         unique_id = object_id or address
         if unique_id is None:
             continue
@@ -415,6 +509,7 @@ def parse_areas(xml: str) -> list[IntegritiArea]:
                 unique_id=unique_id,
                 address=address,
                 control_id=control_id,
+                xml_control_id=object_id,
                 name=_display_name(item, address, expected_type="Area"),
                 description=_direct_text(item, "Description", "Notes"),
                 controller_id=_reference_id(
@@ -455,15 +550,22 @@ def parse_door_states(xml: str) -> list[IntegritiDoorStatus]:
             item, "State", "Value", "DState", "DisplayValue"
         ) or _text(item, "State", "Value", "DState", "DisplayValue")
         roller_raw = _direct_text(item, "RollerState") or _text(item, "RollerState")
-        entity_value = _reference_value(item, "Entity", expected_type="Door")
+        entity_object_id = _reference_id_only(
+            item, "Entity", expected_type="Door"
+        ) or _direct_text(item, "DoorID", "DoorId", "EntityID", "EntityId")
+        entity_address = _reference_address(
+            item, "Entity", expected_type="Door"
+        )
+        entity_value = entity_object_id or entity_address
         result.append(
             IntegritiDoorStatus(
-                entity_id=entity_value
-                or _direct_text(item, "DoorID", "DoorId", "EntityID", "EntityId"),
+                entity_id=entity_value,
+                entity_object_id=entity_object_id,
                 row_id=_attribute(item, "ID", "Id")
                 or _direct_text(item, "ID", "Id"),
                 address=_attribute(item, "Address")
-                or _direct_text(item, "Address", "EntityAddress"),
+                or _direct_text(item, "Address", "EntityAddress")
+                or entity_address,
                 name=_direct_text(item, "Summary", "Name", "DisplayName"),
                 state=_door_state(state_raw),
                 state_raw=state_raw,
@@ -495,15 +597,22 @@ def parse_area_states(xml: str) -> list[IntegritiAreaStatus]:
         ) or _text(item, "State", "Value", "AState", "DisplayValue")
         entry_raw = _direct_text(item, "EntryState") or _text(item, "EntryState")
         exit_raw = _direct_text(item, "ExitState") or _text(item, "ExitState")
-        entity_value = _reference_value(item, "Entity", expected_type="Area")
+        entity_object_id = _reference_id_only(
+            item, "Entity", expected_type="Area"
+        ) or _direct_text(item, "AreaID", "AreaId", "EntityID", "EntityId")
+        entity_address = _reference_address(
+            item, "Entity", expected_type="Area"
+        )
+        entity_value = entity_object_id or entity_address
         result.append(
             IntegritiAreaStatus(
-                entity_id=entity_value
-                or _direct_text(item, "AreaID", "AreaId", "EntityID", "EntityId"),
+                entity_id=entity_value,
+                entity_object_id=entity_object_id,
                 row_id=_attribute(item, "ID", "Id")
                 or _direct_text(item, "ID", "Id"),
                 address=_attribute(item, "Address")
-                or _direct_text(item, "Address", "EntityAddress"),
+                or _direct_text(item, "Address", "EntityAddress")
+                or entity_address,
                 name=_direct_text(item, "Summary", "Name", "DisplayName"),
                 state=_area_state(state_raw),
                 state_raw=state_raw,

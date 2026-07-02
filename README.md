@@ -2,31 +2,25 @@
 
 A local Home Assistant integration for Inner Range Integriti using the REST API with **API-key-only authentication**.
 
-## v0.1.3
+## v0.1.4
 
-This release provides native Home Assistant devices and entities for Integriti doors and security areas.
+This release corrects generic XML door and area control targeting.
 
-### Doors
+### XML control fixes
 
-- Lock entity using normal Integriti XML `DoorAction` commands
-- Lock and unlock no longer apply persistent overrides
-- Grant access through an XML `DoorAction`
-- Separate override select for `Normal`, `Locked`, and `Unlocked`
-- Door contact, held-open, forced-open, connectivity, and roller state entities
-- Door state read from typed `DoorState` or polymorphic `EntityState` responses
+- Door and Area XML actions now use the Integriti database object ID, not an address such as `D38` or `A1`.
+- If the normal discovery response omits the database ID, the integration resolves it with a filtered query immediately before the first XML command and caches it.
+- XML control now tries the synchronous `/XML_Control` endpoint first, matching Integriti's generated REST command.
+- XML bodies are sent as `application/xml`.
+- The parser no longer mistakes `<Ref Type="Door">` or `<Ref Type="Area">` elements for full Door or Area records.
+- Diagnostics show `control_id`, `xml_control_id`, address, and state ID separately.
 
-### Areas
+### Controls
 
-- Alarm control panel with Arm Away and Disarm
-- XML `AreaAction` control using the System Designer serialization order
-- Friendly area names from Area definitions or EntityState summaries
-- Holdup, siren, warning, confirmation, deferred-arming, and siren-holdoff entities
-- Entry delay, exit delay, and user-count sensors
-- Area state read from typed `AreaState` or polymorphic `EntityState` responses
-
-### State refresh after control
-
-After a door or area command, the integration refreshes immediately and again after approximately 1, 3, and 7 seconds. This allows controller state changes to appear without waiting for the normal polling interval.
+- The lock entity uses normal `DoorAction` XML commands for lock, unlock, and grant access.
+- The override select alone uses persistent door overrides.
+- Area arm and disarm use normal `AreaAction` XML commands.
+- State refreshes run immediately and again after approximately 1, 3, and 7 seconds.
 
 ## Installation with HACS
 

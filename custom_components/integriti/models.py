@@ -72,6 +72,7 @@ class IntegritiDoorStatus:
     """Basic-status row associated with an Integriti door."""
 
     entity_id: str | None = None
+    entity_object_id: str | None = None
     row_id: str | None = None
     address: str | None = None
     name: str | None = None
@@ -93,6 +94,7 @@ class IntegritiAreaStatus:
     """Basic-status row associated with an Integriti area."""
 
     entity_id: str | None = None
+    entity_object_id: str | None = None
     row_id: str | None = None
     address: str | None = None
     name: str | None = None
@@ -119,6 +121,7 @@ class IntegritiDoor:
     unique_id: str
     address: str
     control_id: str
+    xml_control_id: str | None
     name: str
     description: str | None = None
     controller_id: str | None = None
@@ -164,6 +167,7 @@ class IntegritiArea:
     unique_id: str
     address: str
     control_id: str
+    xml_control_id: str | None
     name: str
     description: str | None = None
     controller_id: str | None = None

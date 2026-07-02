@@ -143,3 +143,50 @@ def test_parse_area_summary_name():
     area = parse_areas(xml)[0]
     assert area.name == "Main Building"
     assert area.state_id == "state-guid"
+
+
+def test_reference_type_is_not_treated_as_a_door_row() -> None:
+    xml = """
+    <Results xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+      <Door ID="5066553875759108" Address="D38">
+        <Name>Workshop Entry</Name>
+        <State><Ref Type="DoorState" ID="state-1" /></State>
+        <InsideArea><Ref Type="Area" ID="area-1" /></InsideArea>
+      </Door>
+    </Results>
+    """
+    doors = parse_doors(xml)
+    assert len(doors) == 1
+    assert doors[0].xml_control_id == "5066553875759108"
+    assert doors[0].address == "D38"
+
+
+def test_reference_type_is_not_treated_as_an_area_row() -> None:
+    xml = """
+    <Results xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+      <Area ID="5066553875759200" Address="A1">
+        <Name>Main Building</Name>
+        <State><Ref Type="AreaState" ID="state-2" /></State>
+        <Parent><Ref Type="Area" ID="parent-area" /></Parent>
+      </Area>
+    </Results>
+    """
+    areas = parse_areas(xml)
+    assert len(areas) == 1
+    assert areas[0].xml_control_id == "5066553875759200"
+    assert areas[0].name == "Main Building"
+
+
+def test_polymorphic_entity_state_still_uses_xsi_type() -> None:
+    xml = """
+    <Results xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+      <EntityState xsi:type="DoorState" ID="state-1">
+        <Entity><Ref Type="Door" ID="5066553875759108" Address="D38" /></Entity>
+        <State>Locked</State>
+      </EntityState>
+    </Results>
+    """
+    rows = parse_door_states(xml)
+    assert len(rows) == 1
+    assert rows[0].entity_object_id == "5066553875759108"
+    assert rows[0].address == "D38"

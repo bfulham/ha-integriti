@@ -71,6 +71,9 @@ class IntegritiClient:
     timeout: int = DEFAULT_TIMEOUT
     _warned_missing_door_states: bool = field(default=False, init=False, repr=False)
     _warned_missing_area_states: bool = field(default=False, init=False, repr=False)
+    _xml_control_id_cache: dict[tuple[str, str], str] = field(
+        default_factory=dict, init=False, repr=False
+    )
 
     @property
     def headers(self) -> dict[str, str]:
@@ -87,13 +90,14 @@ class IntegritiClient:
         *,
         params: dict[str, str | int | bool] | None = None,
         data: str | bytes | None = None,
+        content_type: str | None = "application/xml; charset=utf-8",
         allow_statuses: Iterable[int] = (),
     ) -> str | None:
         """Issue a request and return its response body."""
         url = f"{self.base_url}{path}"
         headers = self.headers
-        if data is not None:
-            headers = {**headers, "Content-Type": "application/xml; charset=utf-8"}
+        if data is not None and content_type is not None:
+            headers = {**headers, "Content-Type": content_type}
         ssl: bool | None = None if self.verify_ssl else False
         allowed = set(allow_statuses)
         try:
@@ -246,6 +250,7 @@ class IntegritiClient:
                 updates["name"] = candidate.name
             for field_name in (
                 "description",
+                "xml_control_id",
                 "controller_id",
                 "state_id",
                 "state",
@@ -307,7 +312,7 @@ class IntegritiClient:
         lookup: dict[str, int] = {}
         last_error: IntegritiError | None = None
         additional = (
-            "Name,DisplayName,Summary,Description,State,Controller,"
+            "ID,Address,Name,DisplayName,Summary,Description,State,Controller,"
             "InsideArea,OutsideArea,State.State,State.Value,State.Licensed,"
             "State.IsOpen,State.DOTL,State.SilentDOTL,State.Forced,"
             "State.ModuleMissing,State.RollerState,State.IsOverrideOn,"
@@ -340,7 +345,13 @@ class IntegritiClient:
             for row in rows:
                 keys = [
                     self._normalise_key(getattr(row, field_name, None))
-                    for field_name in ("unique_id", "control_id", "address", "state_id")
+                    for field_name in (
+                        "unique_id",
+                        "control_id",
+                        "xml_control_id",
+                        "address",
+                        "state_id",
+                    )
                 ]
                 index = next(
                     (lookup[key] for key in keys if key is not None and key in lookup),
@@ -352,7 +363,13 @@ class IntegritiClient:
                 else:
                     merged_rows[index] = self._merge_definition(merged_rows[index], row)
                 merged = merged_rows[index]
-                for field_name in ("unique_id", "control_id", "address", "state_id"):
+                for field_name in (
+                    "unique_id",
+                    "control_id",
+                    "xml_control_id",
+                    "address",
+                    "state_id",
+                ):
                     key = self._normalise_key(getattr(merged, field_name, None))
                     if key is not None:
                         lookup[key] = index
@@ -367,7 +384,13 @@ class IntegritiClient:
     def _door_lookup(cls, doors: list[IntegritiDoor]) -> dict[str, int]:
         lookup: dict[str, int] = {}
         for index, door in enumerate(doors):
-            for value in (door.unique_id, door.control_id, door.address, door.state_id):
+            for value in (
+                door.unique_id,
+                door.control_id,
+                door.xml_control_id,
+                door.address,
+                door.state_id,
+            ):
                 key = cls._normalise_key(value)
                 if key:
                     lookup[key] = index
@@ -377,7 +400,13 @@ class IntegritiClient:
     def _area_lookup(cls, areas: list[IntegritiArea]) -> dict[str, int]:
         lookup: dict[str, int] = {}
         for index, area in enumerate(areas):
-            for value in (area.unique_id, area.control_id, area.address, area.state_id):
+            for value in (
+                area.unique_id,
+                area.control_id,
+                area.xml_control_id,
+                area.address,
+                area.state_id,
+            ):
                 key = cls._normalise_key(value)
                 if key:
                     lookup[key] = index
@@ -392,6 +421,7 @@ class IntegritiClient:
         values: dict[str, object] = {
             field_name: value
             for field_name, value in {
+                "xml_control_id": status.entity_object_id,
                 "state": status.state,
                 "state_raw": status.state_raw,
                 "licensed": status.licensed,
@@ -419,6 +449,7 @@ class IntegritiClient:
         values: dict[str, object] = {
             field_name: value
             for field_name, value in {
+                "xml_control_id": status.entity_object_id,
                 "state": status.state,
                 "state_raw": status.state_raw,
                 "holdup": status.holdup,
@@ -549,24 +580,171 @@ class IntegritiClient:
         )
         return areas
 
+    @staticmethod
+    def _build_address_filter(address: str) -> bytes:
+        """Build a provided-filter query that resolves a DB object by address."""
+        root = ET.Element(
+            "FilterExpression",
+            {
+                "xmlns:xsd": "http://www.w3.org/2001/XMLSchema",
+                "xmlns:xsi": "http://www.w3.org/2001/XMLSchema-instance",
+                "xsi:type": "PropertyExpression",
+            },
+        )
+        ET.SubElement(root, "PropertyName").text = "Address"
+        ET.SubElement(root, "OperatorType").text = "Equals"
+        args = ET.SubElement(root, "Args")
+        ET.SubElement(
+            args,
+            "anyType",
+            {"xsi:type": "xsd:string"},
+        ).text = address
+        return ET.tostring(root, encoding="utf-8", xml_declaration=False)
+
+    @classmethod
+    def _usable_xml_control_id(
+        cls, candidate: str | None, address: str
+    ) -> str | None:
+        """Return a DB object ID, rejecting an address used as an ID fallback."""
+        value = candidate.strip() if candidate else None
+        if not value:
+            return None
+        if cls._normalise_key(value) == cls._normalise_key(address):
+            return None
+        return value
+
+    async def _async_resolve_xml_control_id(
+        self,
+        entity_type: str,
+        address: str,
+        known_id: str | None,
+        parser: Callable[[str], list[IntegritiDoor | IntegritiArea]],
+    ) -> str:
+        """Resolve the database ID required by DoorAction and AreaAction."""
+        if usable := self._usable_xml_control_id(known_id, address):
+            return usable
+
+        cache_key = (entity_type.casefold(), address.casefold())
+        if cached := self._xml_control_id_cache.get(cache_key):
+            return cached
+
+        payload = self._build_address_filter(address)
+        params: dict[str, str | int | bool] = {
+            "query_page": 1,
+            "query_size": 25,
+            "Page": 1,
+            "PageSize": 25,
+            "FullObject": "true",
+            "AdditionalProperties": "ID,Address,Name,DisplayName,Summary,Controller",
+        }
+        last_error: IntegritiError | None = None
+        for prefix in (BASIC_STATUS_PATH, USER_PATH):
+            path = f"{prefix}/GetFilteredEntities/{entity_type}"
+            try:
+                body = await self._request(
+                    "POST",
+                    path,
+                    params=params,
+                    data=payload,
+                    allow_statuses=(400, 403, 404, 405),
+                )
+            except IntegritiAuthenticationError:
+                raise
+            except IntegritiError as err:
+                last_error = err
+                continue
+            if not body:
+                continue
+            rows = parser(body)
+            exact = [
+                row
+                for row in rows
+                if self._normalise_key(row.address) == self._normalise_key(address)
+            ]
+            for row in exact or rows:
+                candidate = self._usable_xml_control_id(
+                    row.xml_control_id or row.unique_id, address
+                )
+                if candidate:
+                    self._xml_control_id_cache[cache_key] = candidate
+                    _LOGGER.debug(
+                        "Resolved Integriti %s %s to XML control ID %s",
+                        entity_type,
+                        address,
+                        candidate,
+                    )
+                    return candidate
+
+        detail = f": {last_error}" if last_error else ""
+        raise IntegritiResponseError(
+            f"Unable to resolve the Integriti database ID for {entity_type} "
+            f"address {address}. XML control cannot use the address as Ref ID{detail}"
+        )
+
+    @staticmethod
+    def _validate_xml_control_response(body: str | None) -> None:
+        """Raise when Integriti returns an XML error inside a successful HTTP response."""
+        if not body or not body.strip():
+            return
+        text = body.strip()
+        try:
+            root = ET.fromstring(text)
+        except ET.ParseError:
+            if text.casefold() in {"false", "failed", "error"}:
+                raise IntegritiResponseError(
+                    f"Integriti rejected the XML control request: {text[:500]}"
+                )
+            return
+        root_name = root.tag.rsplit("}", 1)[-1].casefold()
+        message = next(
+            (
+                (element.text or "").strip()
+                for element in root.iter()
+                if element.tag.rsplit("}", 1)[-1].casefold()
+                in {"message", "error", "description"}
+                and (element.text or "").strip()
+            ),
+            None,
+        )
+        success = next(
+            (
+                (element.text or "").strip().casefold()
+                for element in root.iter()
+                if element.tag.rsplit("}", 1)[-1].casefold()
+                in {"success", "succeeded"}
+            ),
+            None,
+        )
+        if root_name == "error" or success in {"false", "0", "no"}:
+            raise IntegritiResponseError(
+                "Integriti rejected the XML control request"
+                + (f": {message}" if message else f": {text[:500]}")
+            )
+
     async def _async_post_xml_control(self, payload: bytes) -> None:
         """Post an Integriti action XML payload."""
         permission_error: IntegritiPermissionError | None = None
+        _LOGGER.debug(
+            "Sending Integriti XML control payload: %s",
+            payload.decode("utf-8", errors="replace"),
+        )
         for endpoint in (
-            f"{BASIC_STATUS_PATH}/xml_control",
-            f"{BASIC_STATUS_PATH}/xml_controlAsync",
+            f"{BASIC_STATUS_PATH}/XML_Control",
+            f"{BASIC_STATUS_PATH}/XML_ControlAsync",
         ):
             try:
                 result = await self._request(
                     "POST",
                     endpoint,
                     data=payload,
+                    content_type="application/xml; charset=utf-8",
                     allow_statuses=(404, 405),
                 )
             except IntegritiPermissionError as err:
                 permission_error = err
                 continue
             if result is not None:
+                self._validate_xml_control_response(result)
                 return
         if permission_error is not None:
             raise permission_error
@@ -606,17 +784,20 @@ class IntegritiClient:
         unlock_seconds: int = 0,
     ) -> None:
         """Control a door with a one-shot XML DoorAction."""
+        target_id = await self._async_resolve_xml_control_id(
+            "Door", door.address, door.xml_control_id, parse_doors
+        )
         if action == "lock":
             payload = self._build_door_action(
-                door.control_id, on_assert=1, on_deassert=2
+                target_id, on_assert=1, on_deassert=2
             )
         elif action == "unlock":
             payload = self._build_door_action(
-                door.control_id, on_assert=2, on_deassert=1
+                target_id, on_assert=2, on_deassert=1
             )
         elif action == "grant_access":
             payload = self._build_door_action(
-                door.control_id,
+                target_id,
                 on_assert=3,
                 on_deassert=2,
                 unlock_seconds=unlock_seconds,
@@ -673,6 +854,9 @@ class IntegritiClient:
 
     async def async_control_area(self, area: IntegritiArea, *, arm: bool) -> None:
         """Arm or disarm an area through an XML AreaAction."""
+        target_id = await self._async_resolve_xml_control_id(
+            "Area", area.address, area.xml_control_id, parse_areas
+        )
         await self._async_post_xml_control(
-            self._build_area_action(area.control_id, arm=arm)
+            self._build_area_action(target_id, arm=arm)
         )
