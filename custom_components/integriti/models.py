@@ -68,6 +68,49 @@ class ApiInfo:
 
 
 @dataclass(frozen=True, slots=True)
+class IntegritiDoorStatus:
+    """Basic-status row associated with an Integriti door."""
+
+    entity_id: str | None = None
+    row_id: str | None = None
+    address: str | None = None
+    state: int | None = None
+    state_raw: str | None = None
+    licensed: bool | None = None
+    is_open: bool | None = None
+    dotl: bool | None = None
+    silent_dotl: bool | None = None
+    forced: bool | None = None
+    module_missing: bool | None = None
+    roller_state: int | None = None
+    roller_state_raw: str | None = None
+    is_override_on: bool | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class IntegritiAreaStatus:
+    """Basic-status row associated with an Integriti area."""
+
+    entity_id: str | None = None
+    row_id: str | None = None
+    address: str | None = None
+    state: int | None = None
+    state_raw: str | None = None
+    holdup: bool | None = None
+    entry_state: bool | None = None
+    entry_state_raw: str | None = None
+    exit_state: bool | None = None
+    exit_state_raw: str | None = None
+    siren: bool | None = None
+    pulse: bool | None = None
+    confirm: bool | None = None
+    defer: bool | None = None
+    warn: bool | None = None
+    siren_holdoff: bool | None = None
+    user_count: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class IntegritiDoor:
     """An Integriti door and its current basic status."""
 
@@ -76,6 +119,7 @@ class IntegritiDoor:
     control_id: str
     name: str
     description: str | None = None
+    controller_id: str | None = None
     state: int | None = None
     state_raw: str | None = None
     licensed: bool | None = None
@@ -119,11 +163,14 @@ class IntegritiArea:
     control_id: str
     name: str
     description: str | None = None
+    controller_id: str | None = None
     state: int | None = None
     state_raw: str | None = None
     holdup: bool | None = None
     entry_state: bool | None = None
+    entry_state_raw: str | None = None
     exit_state: bool | None = None
+    exit_state_raw: str | None = None
     siren: bool | None = None
     pulse: bool | None = None
     confirm: bool | None = None

@@ -2,7 +2,7 @@
 
 Experimental native-style Home Assistant integration for the Inner Range Integriti REST API.
 
-## v0.1.0 features
+## v0.1.1 features
 
 - UI config flow with **API-key-only authentication**
 - Multiple Integriti servers
@@ -58,7 +58,7 @@ No Integriti operator username or password is stored or sent.
 - Siren or holdup state maps to Home Assistant `triggered`.
 - Exit and entry states map to `arming` and `pending`.
 
-## Important v0.1.0 notes
+## Important notes
 
 This release was built from the official Integriti v2 Postman collection and the API/action models included with Integriti. Integriti installations may differ by product version, REST licence, operator/API-key permissions, and enabled object properties.
 
@@ -78,3 +78,20 @@ logger:
 ## License
 
 MIT
+
+## v0.1.1 state and area-control fixes
+
+Version 0.1.1 reads `DoorState` and `AreaState` as their own Basic Status
+entities and merges them with the Door and Area database records. Integriti
+stores current state separately from the configured object, so querying only
+`Door` and `Area` can discover the devices while leaving their states unknown.
+
+Area arm/disarm now first uses the documented REST/XML command:
+
+```text
+GET /restapi/Control/Area?Controller=...&Address=...&Action=arm|disarm
+```
+
+The API key is still the only configured credential. If the legacy control
+route is unavailable to API-key sessions, the integration falls back to the
+v2 `AreaAction` XML control endpoint.

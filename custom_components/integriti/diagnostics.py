@@ -31,6 +31,7 @@ async def async_get_config_entry_diagnostics(
             {
                 "unique_id": door.unique_id,
                 "address": door.address,
+                "controller_id": door.controller_id,
                 "state": door.state_raw,
                 "licensed": door.licensed,
                 "is_open": door.is_open,
@@ -46,10 +47,13 @@ async def async_get_config_entry_diagnostics(
             {
                 "unique_id": area.unique_id,
                 "address": area.address,
+                "controller_id": area.controller_id,
                 "state": area.state_raw,
                 "holdup": area.holdup,
                 "entry_state": area.entry_state,
+                "entry_state_raw": area.entry_state_raw,
                 "exit_state": area.exit_state,
+                "exit_state_raw": area.exit_state_raw,
                 "siren": area.siren,
                 "confirm": area.confirm,
                 "defer": area.defer,

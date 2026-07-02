@@ -60,7 +60,11 @@ class IntegritiAreaEntryStateSensor(IntegritiAreaEntity, SensorEntity):
     @property
     def native_value(self) -> str | None:
         area = self.area
-        if area is None or area.entry_state is None:
+        if area is None:
+            return None
+        if area.entry_state_raw is not None and area.entry_state is None:
+            return area.entry_state_raw
+        if area.entry_state is None:
             return None
         return "active" if area.entry_state else "idle"
 
@@ -74,7 +78,11 @@ class IntegritiAreaExitStateSensor(IntegritiAreaEntity, SensorEntity):
     @property
     def native_value(self) -> str | None:
         area = self.area
-        if area is None or area.exit_state is None:
+        if area is None:
+            return None
+        if area.exit_state_raw is not None and area.exit_state is None:
+            return area.exit_state_raw
+        if area.exit_state is None:
             return None
         return "active" if area.exit_state else "idle"
 

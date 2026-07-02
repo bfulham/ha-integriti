@@ -94,7 +94,7 @@ class IntegritiAreaAlarm(IntegritiAreaEntity, AlarmControlPanelEntity):
         area = self.area
         if area is None:
             raise HomeAssistantError("Area is not available")
-        await self.coordinator.client.async_control_area(area.control_id, arm=True)
+        await self.coordinator.client.async_control_area(area, arm=True)
         await self.coordinator.async_request_refresh()
 
     async def async_alarm_disarm(self, code: str | None = None) -> None:
@@ -102,5 +102,5 @@ class IntegritiAreaAlarm(IntegritiAreaEntity, AlarmControlPanelEntity):
         area = self.area
         if area is None:
             raise HomeAssistantError("Area is not available")
-        await self.coordinator.client.async_control_area(area.control_id, arm=False)
+        await self.coordinator.client.async_control_area(area, arm=False)
         await self.coordinator.async_request_refresh()
