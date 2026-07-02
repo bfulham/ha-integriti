@@ -77,25 +77,25 @@ class IntegritiDoorLock(IntegritiDoorEntity, LockEntity):
             raise HomeAssistantError("Door control is disabled in Integriti options")
 
     async def async_lock(self, **kwargs: object) -> None:
-        """Apply an Integriti locked override."""
+        """Send a normal Integriti XML lock action."""
         self._require_control()
         door = self.door
         if door is None:
             raise HomeAssistantError("Door is not available")
-        await self.coordinator.client.async_override_door(door.address, locked=True)
-        await self.coordinator.async_request_refresh()
+        await self.coordinator.client.async_control_door(door, action="lock")
+        await self.coordinator.async_refresh_after_command()
 
     async def async_unlock(self, **kwargs: object) -> None:
-        """Apply an Integriti unlocked override."""
+        """Send a normal Integriti XML unlock action."""
         self._require_control()
         door = self.door
         if door is None:
             raise HomeAssistantError("Door is not available")
-        await self.coordinator.client.async_override_door(door.address, locked=False)
-        await self.coordinator.async_request_refresh()
+        await self.coordinator.client.async_control_door(door, action="unlock")
+        await self.coordinator.async_refresh_after_command()
 
     async def async_open(self, **kwargs: object) -> None:
-        """Momentarily grant access through the door."""
+        """Momentarily grant access with an Integriti XML DoorAction."""
         self._require_control()
         door = self.door
         if door is None:
@@ -108,5 +108,7 @@ class IntegritiDoorLock(IntegritiDoorEntity, LockEntity):
                 ),
             )
         )
-        await self.coordinator.client.async_grant_access(door.address, seconds)
-        await self.coordinator.async_request_refresh()
+        await self.coordinator.client.async_control_door(
+            door, action="grant_access", unlock_seconds=seconds
+        )
+        await self.coordinator.async_refresh_after_command()

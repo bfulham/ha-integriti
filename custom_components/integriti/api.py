@@ -136,12 +136,7 @@ class IntegritiClient:
             raise IntegritiConnectionError(f"Unable to reach {url}: {err}") from err
 
     async def async_get_api_info(self, *, optional: bool = False) -> ApiInfo:
-        """Return API and product version information.
-
-        Some API-key roles can read Basic Status but are denied access to the
-        ApiVersion route.  Version information is therefore optional during
-        normal setup and polling.
-        """
+        """Return API and product version information."""
         body = await self._request(
             "GET",
             API_VERSION_PATH,
@@ -185,8 +180,6 @@ class IntegritiClient:
             entities.extend(rows)
             total, response_page, response_size = parse_page_metadata(body)
             if total is None:
-                # Most installations return every row when PageSize is supplied.
-                # If exactly a full page is returned, try the next page as well.
                 if len(rows) < page_size:
                     break
                 page += 1
@@ -213,7 +206,6 @@ class IntegritiClient:
                 "GET",
                 path,
                 params={"query_page": page, "query_size": page_size},
-                # Older handlers may not allow API-key-only authentication.
                 allow_statuses=(400, 401, 403, 404, 405),
             )
             if body is None:
@@ -230,13 +222,99 @@ class IntegritiClient:
             page += 1
         return entities
 
+    @staticmethod
+    def _normalise_key(value: str | None) -> str | None:
+        return value.strip().casefold() if value else None
+
+    @classmethod
+    def _is_identifier_name(cls, entity: IntegritiDoor | IntegritiArea) -> bool:
+        name = cls._normalise_key(entity.name)
+        return name is None or name in {
+            cls._normalise_key(entity.unique_id),
+            cls._normalise_key(entity.control_id),
+            cls._normalise_key(entity.address),
+        }
+
+    @classmethod
+    def _merge_definition(cls, current: T, candidate: T) -> T:
+        """Merge duplicate definition rows, preferring friendly and populated data."""
+        updates: dict[str, object] = {}
+        if isinstance(current, (IntegritiDoor, IntegritiArea)) and isinstance(
+            candidate, (IntegritiDoor, IntegritiArea)
+        ):
+            if cls._is_identifier_name(current) and not cls._is_identifier_name(candidate):
+                updates["name"] = candidate.name
+            for field_name in (
+                "description",
+                "controller_id",
+                "state_id",
+                "state",
+                "state_raw",
+            ):
+                if (
+                    getattr(current, field_name) is None
+                    and getattr(candidate, field_name) is not None
+                ):
+                    updates[field_name] = getattr(candidate, field_name)
+            if isinstance(current, IntegritiDoor) and isinstance(candidate, IntegritiDoor):
+                for field_name in (
+                    "licensed",
+                    "is_open",
+                    "dotl",
+                    "silent_dotl",
+                    "forced",
+                    "module_missing",
+                    "roller_state",
+                    "roller_state_raw",
+                    "is_override_on",
+                    "inside_area",
+                    "outside_area",
+                ):
+                    if (
+                        getattr(current, field_name) is None
+                        and getattr(candidate, field_name) is not None
+                    ):
+                        updates[field_name] = getattr(candidate, field_name)
+            if isinstance(current, IntegritiArea) and isinstance(candidate, IntegritiArea):
+                for field_name in (
+                    "holdup",
+                    "entry_state",
+                    "entry_state_raw",
+                    "exit_state",
+                    "exit_state_raw",
+                    "siren",
+                    "pulse",
+                    "confirm",
+                    "defer",
+                    "warn",
+                    "siren_holdoff",
+                    "user_count",
+                ):
+                    if (
+                        getattr(current, field_name) is None
+                        and getattr(candidate, field_name) is not None
+                    ):
+                        updates[field_name] = getattr(candidate, field_name)
+        return replace(current, **updates) if updates else current
+
     async def _get_definitions(
         self,
         entity_type: str,
         parser: Callable[[str], list[T]],
     ) -> list[T]:
-        """Read entity definitions, preferring the User Management route."""
+        """Read and merge entity definitions from all API-key-capable routes."""
+        merged_rows: list[T] = []
+        lookup: dict[str, int] = {}
         last_error: IntegritiError | None = None
+        additional = (
+            "Name,DisplayName,Summary,Description,State,Controller,"
+            "InsideArea,OutsideArea,State.State,State.Value,State.Licensed,"
+            "State.IsOpen,State.DOTL,State.SilentDOTL,State.Forced,"
+            "State.ModuleMissing,State.RollerState,State.IsOverrideOn,"
+            "State.Holdup,State.EntryState,State.ExitState,State.Siren,"
+            "State.Pulse,State.Confirm,State.Defer,State.Warn,"
+            "State.SirenHoldoff,State.UserCount"
+        )
         for path_prefix in (USER_PATH, BASIC_STATUS_PATH):
             try:
                 rows = await self._get_all_entities_from_path(
@@ -244,20 +322,8 @@ class IntegritiClient:
                     entity_type,
                     parser,
                     optional=True,
-                    extra_params={
-                        "AdditionalProperties": (
-                            "State,Controller,InsideArea,OutsideArea,"
-                            "State.State,State.Licensed,State.IsOpen,State.DOTL,"
-                            "State.SilentDOTL,State.Forced,State.ModuleMissing,"
-                            "State.RollerState,State.IsOverrideOn,State.Holdup,"
-                            "State.EntryState,State.ExitState,State.Siren,"
-                            "State.Pulse,State.Confirm,State.Defer,State.Warn,"
-                            "State.SirenHoldoff,State.UserCount"
-                        )
-                    },
+                    extra_params={"AdditionalProperties": additional},
                 )
-                if rows is not None and rows:
-                    return rows
             except IntegritiAuthenticationError:
                 raise
             except IntegritiError as err:
@@ -268,24 +334,40 @@ class IntegritiClient:
                     entity_type,
                     err,
                 )
+                continue
+            if not rows:
+                continue
+            for row in rows:
+                keys = [
+                    self._normalise_key(getattr(row, field_name, None))
+                    for field_name in ("unique_id", "control_id", "address", "state_id")
+                ]
+                index = next(
+                    (lookup[key] for key in keys if key is not None and key in lookup),
+                    None,
+                )
+                if index is None:
+                    index = len(merged_rows)
+                    merged_rows.append(row)
+                else:
+                    merged_rows[index] = self._merge_definition(merged_rows[index], row)
+                merged = merged_rows[index]
+                for field_name in ("unique_id", "control_id", "address", "state_id"):
+                    key = self._normalise_key(getattr(merged, field_name, None))
+                    if key is not None:
+                        lookup[key] = index
+
+        if merged_rows:
+            return merged_rows
         if last_error is not None:
             raise last_error
         return []
-
-    @staticmethod
-    def _normalise_key(value: str | None) -> str | None:
-        return value.strip().casefold() if value else None
 
     @classmethod
     def _door_lookup(cls, doors: list[IntegritiDoor]) -> dict[str, int]:
         lookup: dict[str, int] = {}
         for index, door in enumerate(doors):
-            for value in (
-                door.unique_id,
-                door.control_id,
-                door.address,
-                door.state_id,
-            ):
+            for value in (door.unique_id, door.control_id, door.address, door.state_id):
                 key = cls._normalise_key(value)
                 if key:
                     lookup[key] = index
@@ -295,25 +377,21 @@ class IntegritiClient:
     def _area_lookup(cls, areas: list[IntegritiArea]) -> dict[str, int]:
         lookup: dict[str, int] = {}
         for index, area in enumerate(areas):
-            for value in (
-                area.unique_id,
-                area.control_id,
-                area.address,
-                area.state_id,
-            ):
+            for value in (area.unique_id, area.control_id, area.address, area.state_id):
                 key = cls._normalise_key(value)
                 if key:
                     lookup[key] = index
         return lookup
 
-    @staticmethod
+    @classmethod
     def _merge_door_status(
+        cls,
         door: IntegritiDoor,
         status: IntegritiDoorStatus,
     ) -> IntegritiDoor:
-        values = {
-            field: value
-            for field, value in {
+        values: dict[str, object] = {
+            field_name: value
+            for field_name, value in {
                 "state": status.state,
                 "state_raw": status.state_raw,
                 "licensed": status.licensed,
@@ -328,16 +406,19 @@ class IntegritiClient:
             }.items()
             if value is not None
         }
+        if status.name and cls._is_identifier_name(door):
+            values["name"] = status.name
         return replace(door, **values) if values else door
 
-    @staticmethod
+    @classmethod
     def _merge_area_status(
+        cls,
         area: IntegritiArea,
         status: IntegritiAreaStatus,
     ) -> IntegritiArea:
-        values = {
-            field: value
-            for field, value in {
+        values: dict[str, object] = {
+            field_name: value
+            for field_name, value in {
                 "state": status.state,
                 "state_raw": status.state_raw,
                 "holdup": status.holdup,
@@ -355,33 +436,51 @@ class IntegritiClient:
             }.items()
             if value is not None
         }
+        if status.name and cls._is_identifier_name(area):
+            values["name"] = status.name
         return replace(area, **values) if values else area
 
+    async def _get_status_rows(
+        self,
+        preferred_type: str,
+        parser: Callable[[str], list[T]],
+    ) -> list[T] | None:
+        """Read typed states, falling back to polymorphic EntityState."""
+        additional = (
+            "Entity,Summary,Name,State,Value,DisplayValue,Licensed,IsOpen,DOTL,"
+            "SilentDOTL,Forced,ModuleMissing,RollerState,IsOverrideOn,Holdup,"
+            "EntryState,ExitState,Siren,Pulse,Confirm,Defer,Warn,SirenHoldoff,UserCount"
+        )
+        for entity_type in (preferred_type, "EntityState"):
+            for prefix in (BASIC_STATUS_PATH, USER_PATH):
+                rows = await self._get_all_entities_from_path(
+                    prefix,
+                    entity_type,
+                    parser,
+                    optional=True,
+                    extra_params={"AdditionalProperties": additional},
+                )
+                if rows:
+                    return rows
+        rows = await self._get_legacy_states(preferred_type, parser)
+        if rows:
+            return rows
+        return await self._get_legacy_states("EntityState", parser)
+
     async def async_get_doors(self) -> list[IntegritiDoor]:
-        """Return all visible doors merged with standalone DoorState rows."""
+        """Return all visible doors merged with current state rows."""
         doors = await self._get_definitions("Door", parse_doors)
         if not doors:
             return []
 
-        statuses: list[IntegritiDoorStatus] | None = None
-        for prefix in (BASIC_STATUS_PATH, USER_PATH):
-            statuses = await self._get_all_entities_from_path(
-                prefix,
-                "DoorState",
-                parse_door_states,
-                optional=True,
-                extra_params={"AdditionalProperties": "Entity"},
-            )
-            if statuses:
-                break
+        statuses = await self._get_status_rows("DoorState", parse_door_states)
         if not statuses:
-            statuses = await self._get_legacy_states("DoorState", parse_door_states)
-
-        if not statuses:
+            if any(door.state is not None for door in doors):
+                return doors
             if not self._warned_missing_door_states:
                 _LOGGER.warning(
-                    "Integriti returned %s doors but no DoorState rows; lock/contact "
-                    "states will remain unknown. Check Basic Status read permissions.",
+                    "Integriti returned %s doors but no usable DoorState/EntityState "
+                    "rows; lock and contact states will remain unknown",
                     len(doors),
                 )
                 self._warned_missing_door_states = True
@@ -410,30 +509,19 @@ class IntegritiClient:
         return doors
 
     async def async_get_areas(self) -> list[IntegritiArea]:
-        """Return all visible areas merged with standalone AreaState rows."""
+        """Return all visible areas merged with current state rows."""
         areas = await self._get_definitions("Area", parse_areas)
         if not areas:
             return []
 
-        statuses: list[IntegritiAreaStatus] | None = None
-        for prefix in (BASIC_STATUS_PATH, USER_PATH):
-            statuses = await self._get_all_entities_from_path(
-                prefix,
-                "AreaState",
-                parse_area_states,
-                optional=True,
-                extra_params={"AdditionalProperties": "Entity"},
-            )
-            if statuses:
-                break
+        statuses = await self._get_status_rows("AreaState", parse_area_states)
         if not statuses:
-            statuses = await self._get_legacy_states("AreaState", parse_area_states)
-
-        if not statuses:
+            if any(area.state is not None for area in areas):
+                return areas
             if not self._warned_missing_area_states:
                 _LOGGER.warning(
-                    "Integriti returned %s areas but no AreaState rows; alarm states "
-                    "will remain unknown. Check Basic Status read permissions.",
+                    "Integriti returned %s areas but no usable AreaState/EntityState "
+                    "rows; alarm states will remain unknown",
                     len(areas),
                 )
                 self._warned_missing_area_states = True
@@ -461,108 +549,9 @@ class IntegritiClient:
         )
         return areas
 
-    async def async_grant_access(
-        self,
-        door_address: str,
-        seconds: int,
-        *,
-        force_even_if_overridden: bool = False,
-    ) -> None:
-        """Momentarily grant access through a door."""
-        root = ET.Element("GrantAccessActionOptions")
-        ET.SubElement(root, "UnlockSeconds").text = str(seconds)
-        ET.SubElement(root, "ForceEvenIfOverridden").text = str(
-            force_even_if_overridden
-        )
-        await self._request(
-            "POST",
-            f"{BASIC_STATUS_PATH}/GrantAccess/{quote(door_address, safe='')}",
-            data=ET.tostring(root, encoding="utf-8", xml_declaration=False),
-        )
-
-    async def async_override_door(self, door_address: str, *, locked: bool) -> None:
-        """Apply a persistent locked or unlocked override."""
-        root = ET.Element("OverrideDoorActionOptions")
-        ET.SubElement(root, "OverrideDoorAction").text = (
-            "OverrideLocked" if locked else "OverrideUnlocked"
-        )
-        await self._request(
-            "POST",
-            f"{BASIC_STATUS_PATH}/overridedoor/{quote(door_address, safe='')}",
-            data=ET.tostring(root, encoding="utf-8", xml_declaration=False),
-        )
-
-    async def async_remove_door_override(self, door_address: str) -> None:
-        """Return a door to normal Integriti control."""
-        await self._request(
-            "POST",
-            f"{BASIC_STATUS_PATH}/RemoveDoorOverride/{quote(door_address, safe='')}",
-            data=b"",
-        )
-
-    async def _async_control_area_legacy(
-        self,
-        area: IntegritiArea,
-        *,
-        arm: bool,
-    ) -> bool:
-        """Use the documented REST/XML Control/Area command."""
-        action = "arm" if arm else "disarm"
-        candidates: list[dict[str, str]] = []
-        if area.controller_id and area.address:
-            candidates.append(
-                {
-                    "Controller": area.controller_id,
-                    "Address": area.address,
-                    "Action": action,
-                }
-            )
-        if area.control_id:
-            candidates.append({"ID": area.control_id, "Action": action})
-        candidates.append({"Name": area.name, "Action": action})
-
-        seen: set[tuple[tuple[str, str], ...]] = set()
-        for params in candidates:
-            marker = tuple(sorted(params.items()))
-            if marker in seen:
-                continue
-            seen.add(marker)
-            body = await self._request(
-                "GET",
-                "/Control/Area",
-                params=params,
-                # Some installations expose only the v2 API to API-key users.
-                allow_statuses=(400, 401, 403, 404, 405),
-            )
-            if body is not None:
-                return True
-        return False
-
-    async def _async_control_area_v2(
-        self,
-        area: IntegritiArea,
-        *,
-        arm: bool,
-    ) -> None:
-        """Control an area by posting a one-shot AreaAction."""
-        action_id = str(uuid4())
-        root = ET.Element("AreaAction", {"ID": action_id})
-        ET.SubElement(root, "ID").text = action_id
-        # XML_Control executes the assert edge. Swap the two configured actions
-        # when a disarm operation is requested.
-        ET.SubElement(root, "OnAssert").text = "1" if arm else "2"
-        ET.SubElement(root, "OnDeAssert").text = "2" if arm else "1"
-        ET.SubElement(root, "InvertQualifier").text = "False"
-        ET.SubElement(root, "WaitUntilComplete").text = "False"
-        ET.SubElement(root, "NoEnable").text = "False"
-        ET.SubElement(root, "AreaActionType").text = "0"
-        entity = ET.SubElement(root, "Entity")
-        ET.SubElement(entity, "Ref", {"Type": "Area", "ID": area.control_id})
-        payload = ET.tostring(root, encoding="utf-8", xml_declaration=False)
-
-        forbidden = False
-        # The synchronous route is the generated System Designer command and
-        # requires fewer API capabilities than XML_ControlAsync on some roles.
+    async def _async_post_xml_control(self, payload: bytes) -> None:
+        """Post an Integriti action XML payload."""
+        permission_error: IntegritiPermissionError | None = None
         for endpoint in (
             f"{BASIC_STATUS_PATH}/xml_control",
             f"{BASIC_STATUS_PATH}/xml_controlAsync",
@@ -572,19 +561,118 @@ class IntegritiClient:
                     "POST",
                     endpoint,
                     data=payload,
-                    allow_statuses=(400, 404, 405),
+                    allow_statuses=(404, 405),
                 )
-            except IntegritiPermissionError:
-                forbidden = True
+            except IntegritiPermissionError as err:
+                permission_error = err
                 continue
             if result is not None:
                 return
-        if forbidden:
-            raise IntegritiPermissionError(
-                "The API key lacks permission to execute XML area actions"
+        if permission_error is not None:
+            raise permission_error
+        raise IntegritiResponseError("No supported XML control endpoint was found")
+
+    @staticmethod
+    def _build_door_action(
+        door_id: str,
+        *,
+        on_assert: int,
+        on_deassert: int,
+        unlock_seconds: int = 0,
+    ) -> bytes:
+        """Build XML in the same property order as System Designer."""
+        action_id = str(uuid4())
+        root = ET.Element("DoorAction", {"ID": action_id})
+        ET.SubElement(root, "ID").text = action_id
+        ET.SubElement(root, "OnAssert").text = str(on_assert)
+        ET.SubElement(root, "OnDeAssert").text = str(on_deassert)
+        ET.SubElement(root, "InvertQualifier").text = "False"
+        ET.SubElement(root, "WaitUntilComplete").text = "False"
+        entity = ET.SubElement(root, "Entity")
+        ET.SubElement(entity, "Ref", {"Type": "Door", "ID": door_id})
+        ET.SubElement(root, "UnlockTimeTicks").text = str(
+            max(0, unlock_seconds) * 10_000_000
+        )
+        ET.SubElement(root, "Genre").text = "0"
+        ET.SubElement(root, "DisarmAreas").text = "False"
+        ET.SubElement(root, "IgnoreInterlocks").text = "False"
+        return ET.tostring(root, encoding="utf-8", xml_declaration=False)
+
+    async def async_control_door(
+        self,
+        door: IntegritiDoor,
+        *,
+        action: str,
+        unlock_seconds: int = 0,
+    ) -> None:
+        """Control a door with a one-shot XML DoorAction."""
+        if action == "lock":
+            payload = self._build_door_action(
+                door.control_id, on_assert=1, on_deassert=2
             )
-        raise IntegritiResponseError("No supported area control endpoint was found")
+        elif action == "unlock":
+            payload = self._build_door_action(
+                door.control_id, on_assert=2, on_deassert=1
+            )
+        elif action == "grant_access":
+            payload = self._build_door_action(
+                door.control_id,
+                on_assert=3,
+                on_deassert=2,
+                unlock_seconds=unlock_seconds,
+            )
+        else:
+            raise ValueError(f"Unsupported Integriti door action: {action}")
+        await self._async_post_xml_control(payload)
+
+    async def async_grant_access(self, door_id: str, seconds: int) -> None:
+        """Use the dedicated grant-access endpoint as a compatibility fallback."""
+        root = ET.Element("GrantAccessActionOptions")
+        ET.SubElement(root, "UnlockSeconds").text = str(seconds)
+        await self._request(
+            "POST",
+            f"{BASIC_STATUS_PATH}/GrantAccess/{quote(door_id, safe='')}",
+            data=ET.tostring(root, encoding="utf-8", xml_declaration=False),
+        )
+
+    async def async_override_door(self, door_id: str, *, locked: bool) -> None:
+        """Apply a persistent locked or unlocked override."""
+        root = ET.Element("OverrideDoorActionOptions")
+        ET.SubElement(root, "OverrideDoorAction").text = (
+            "OverrideLocked" if locked else "OverrideUnlocked"
+        )
+        await self._request(
+            "POST",
+            f"{BASIC_STATUS_PATH}/overridedoor/{quote(door_id, safe='')}",
+            data=ET.tostring(root, encoding="utf-8", xml_declaration=False),
+        )
+
+    async def async_remove_door_override(self, door_id: str) -> None:
+        """Return a door to normal Integriti control."""
+        await self._request(
+            "POST",
+            f"{BASIC_STATUS_PATH}/RemoveDoorOverride/{quote(door_id, safe='')}",
+            data=b"",
+        )
+
+    @staticmethod
+    def _build_area_action(area_id: str, *, arm: bool) -> bytes:
+        """Build a one-shot AreaAction in Integriti serialization order."""
+        action_id = str(uuid4())
+        root = ET.Element("AreaAction", {"ID": action_id})
+        ET.SubElement(root, "ID").text = action_id
+        ET.SubElement(root, "OnAssert").text = "1" if arm else "2"
+        ET.SubElement(root, "OnDeAssert").text = "2" if arm else "1"
+        ET.SubElement(root, "InvertQualifier").text = "False"
+        ET.SubElement(root, "WaitUntilComplete").text = "False"
+        entity = ET.SubElement(root, "Entity")
+        ET.SubElement(entity, "Ref", {"Type": "Area", "ID": area_id})
+        ET.SubElement(root, "NoEnable").text = "False"
+        ET.SubElement(root, "AreaActionType").text = "0"
+        return ET.tostring(root, encoding="utf-8", xml_declaration=False)
 
     async def async_control_area(self, area: IntegritiArea, *, arm: bool) -> None:
-        """Arm or disarm an area through the API-key-capable v2 route."""
-        await self._async_control_area_v2(area, arm=arm)
+        """Arm or disarm an area through an XML AreaAction."""
+        await self._async_post_xml_control(
+            self._build_area_action(area.control_id, arm=arm)
+        )

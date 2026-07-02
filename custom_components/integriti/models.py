@@ -74,6 +74,7 @@ class IntegritiDoorStatus:
     entity_id: str | None = None
     row_id: str | None = None
     address: str | None = None
+    name: str | None = None
     state: int | None = None
     state_raw: str | None = None
     licensed: bool | None = None
@@ -94,6 +95,7 @@ class IntegritiAreaStatus:
     entity_id: str | None = None
     row_id: str | None = None
     address: str | None = None
+    name: str | None = None
     state: int | None = None
     state_raw: str | None = None
     holdup: bool | None = None

@@ -50,8 +50,6 @@ def _element_text(element: ET.Element) -> str | None:
     if len(element) == 0:
         return _clean(element.text)
 
-    # Polymorphic state properties are commonly serialized as
-    # <State><State>Locked</State>...</State>.
     own_name = _local_name(element.tag).casefold()
     for child in element:
         if _local_name(child.tag).casefold() == own_name and len(child) == 0:
@@ -200,41 +198,114 @@ def _rows(root: ET.Element, entity_type: str) -> list[ET.Element]:
     return found
 
 
-def _reference_id(
+def _reference_value(
     node: ET.Element,
     property_name: str,
     *,
     expected_type: str | None = None,
 ) -> str | None:
-    """Return the ID from a serialized DBObject reference property."""
+    """Return an ID or address from a serialized DBObject reference."""
     expected = expected_type.casefold() if expected_type else None
     properties = list(_children(node, property_name))
     for prop in properties:
-        direct_id = _attribute(prop, "ID", "Id")
-        if direct_id is not None:
-            return direct_id
+        direct = _attribute(prop, "ID", "Id", "Address")
+        if direct is not None:
+            return direct
         for ref in prop.iter():
             if _local_name(ref.tag).casefold() != "ref":
                 continue
             ref_type = _attribute(ref, "Type")
             if expected and ref_type and ref_type.casefold() != expected:
                 continue
-            ref_id = _attribute(ref, "ID", "Id") or _direct_text(ref, "ID", "Id")
-            if ref_id is not None:
-                return ref_id
+            value = (
+                _attribute(ref, "ID", "Id", "Address")
+                or _direct_text(ref, "ID", "Id", "Address")
+            )
+            if value is not None:
+                return value
 
-    # Some serializers flatten the Ref rather than wrapping it in the named
-    # property. Only accept a flattened ref when the expected type matches.
     if expected:
         for ref in node.iter():
             if _local_name(ref.tag).casefold() != "ref":
                 continue
             ref_type = _attribute(ref, "Type")
             if ref_type and ref_type.casefold() == expected:
-                ref_id = _attribute(ref, "ID", "Id")
-                if ref_id is not None:
-                    return ref_id
+                value = _attribute(ref, "ID", "Id", "Address")
+                if value is not None:
+                    return value
     return None
+
+
+def _reference_id(
+    node: ET.Element,
+    property_name: str,
+    *,
+    expected_type: str | None = None,
+) -> str | None:
+    """Return an ID/address from a serialized DBObject reference property."""
+    return _reference_value(node, property_name, expected_type=expected_type)
+
+
+def _reference_name(
+    node: ET.Element,
+    property_name: str,
+    *,
+    expected_type: str | None = None,
+) -> str | None:
+    expected = expected_type.casefold() if expected_type else None
+    for prop in _children(node, property_name):
+        direct = _attribute(prop, "Name", "DisplayName", "Summary")
+        if direct is not None:
+            return direct
+        for ref in prop.iter():
+            if _local_name(ref.tag).casefold() != "ref":
+                continue
+            ref_type = _attribute(ref, "Type")
+            if expected and ref_type and ref_type.casefold() != expected:
+                continue
+            value = _attribute(ref, "Name", "DisplayName", "Summary")
+            if value is not None:
+                return value
+    return None
+
+
+def _display_name(
+    node: ET.Element,
+    fallback: str,
+    *,
+    expected_type: str,
+) -> str:
+    """Extract a friendly name from full or summary-only API responses."""
+    value = (
+        _direct_text(node, "Name", "DisplayName", "Summary", "EntityName")
+        or _attribute(node, "Name", "DisplayName", "Summary", "EntityName")
+        or _reference_name(node, "Entity", expected_type=expected_type)
+    )
+    return value or fallback
+
+
+def _state_rows(root: ET.Element, entity_type: str) -> list[ET.Element]:
+    """Return typed state rows, including generic EntityState fallbacks."""
+    typed = _rows(root, entity_type)
+    if typed:
+        return typed
+
+    expected_ref = "Door" if entity_type.casefold() == "doorstate" else "Area"
+    result: list[ET.Element] = []
+    for item in _rows(root, "EntityState"):
+        if _reference_value(item, "Entity", expected_type=expected_ref) is not None:
+            result.append(item)
+            continue
+        child_names = {_local_name(child.tag).casefold() for child in item.iter()}
+        if expected_ref == "Door" and child_names.intersection(
+            {"isopen", "dotl", "forced", "rollerstate", "modulemissing"}
+        ):
+            result.append(item)
+        elif expected_ref == "Area" and child_names.intersection(
+            {"holdup", "entrystate", "exitstate", "siren", "usercount"}
+        ):
+            result.append(item)
+    return result
 
 
 def parse_api_info(xml: str) -> ApiInfo:
@@ -287,27 +358,20 @@ def parse_doors(xml: str) -> list[IntegritiDoor]:
             continue
         address = address or unique_id
         control_id = object_id or address
-        name = (
-            _direct_text(item, "Name", "DisplayName")
-            or _attribute(item, "Name")
-            or address
-        )
-        state_raw = _text(item, "State")
+        state_raw = _text(item, "State", "Value", "DState", "DisplayValue")
         roller_raw = _text(item, "RollerState")
         result.append(
             IntegritiDoor(
                 unique_id=unique_id,
                 address=address,
                 control_id=control_id,
-                name=name,
+                name=_display_name(item, address, expected_type="Door"),
                 description=_direct_text(item, "Description", "Notes"),
                 controller_id=_reference_id(
                     item, "Controller", expected_type="Controller"
                 )
                 or _direct_text(item, "Controller", "ControllerID", "ControllerId"),
-                state_id=_reference_id(
-                    item, "State", expected_type="DoorState"
-                ),
+                state_id=_reference_id(item, "State", expected_type="DoorState"),
                 state=_door_state(state_raw),
                 state_raw=state_raw,
                 licensed=_bool(_text(item, "Licensed")),
@@ -343,12 +407,7 @@ def parse_areas(xml: str) -> list[IntegritiArea]:
             continue
         address = address or unique_id
         control_id = object_id or address
-        name = (
-            _direct_text(item, "Name", "DisplayName")
-            or _attribute(item, "Name")
-            or address
-        )
-        state_raw = _text(item, "State")
+        state_raw = _text(item, "State", "Value", "AState", "DisplayValue")
         entry_raw = _text(item, "EntryState")
         exit_raw = _text(item, "ExitState")
         result.append(
@@ -356,15 +415,13 @@ def parse_areas(xml: str) -> list[IntegritiArea]:
                 unique_id=unique_id,
                 address=address,
                 control_id=control_id,
-                name=name,
+                name=_display_name(item, address, expected_type="Area"),
                 description=_direct_text(item, "Description", "Notes"),
                 controller_id=_reference_id(
                     item, "Controller", expected_type="Controller"
                 )
                 or _direct_text(item, "Controller", "ControllerID", "ControllerId"),
-                state_id=_reference_id(
-                    item, "State", expected_type="AreaState"
-                ),
+                state_id=_reference_id(item, "State", expected_type="AreaState"),
                 state=_area_state(state_raw),
                 state_raw=state_raw,
                 holdup=_bool(_text(item, "Holdup")),
@@ -386,24 +443,28 @@ def parse_areas(xml: str) -> list[IntegritiArea]:
 
 
 def parse_door_states(xml: str) -> list[IntegritiDoorStatus]:
-    """Parse standalone DoorState/EntityState rows."""
+    """Parse standalone DoorState or polymorphic EntityState rows."""
     try:
         root = ET.fromstring(xml)
     except ET.ParseError as err:
         raise IntegritiParseError(f"Invalid DoorState XML: {err}") from err
 
     result: list[IntegritiDoorStatus] = []
-    for item in _rows(root, "DoorState"):
-        state_raw = _direct_text(item, "State") or _text(item, "State")
+    for item in _state_rows(root, "DoorState"):
+        state_raw = _direct_text(
+            item, "State", "Value", "DState", "DisplayValue"
+        ) or _text(item, "State", "Value", "DState", "DisplayValue")
         roller_raw = _direct_text(item, "RollerState") or _text(item, "RollerState")
+        entity_value = _reference_value(item, "Entity", expected_type="Door")
         result.append(
             IntegritiDoorStatus(
-                entity_id=_reference_id(item, "Entity", expected_type="Door")
+                entity_id=entity_value
                 or _direct_text(item, "DoorID", "DoorId", "EntityID", "EntityId"),
                 row_id=_attribute(item, "ID", "Id")
                 or _direct_text(item, "ID", "Id"),
                 address=_attribute(item, "Address")
                 or _direct_text(item, "Address", "EntityAddress"),
+                name=_direct_text(item, "Summary", "Name", "DisplayName"),
                 state=_door_state(state_raw),
                 state_raw=state_raw,
                 licensed=_bool(_text(item, "Licensed")),
@@ -421,25 +482,29 @@ def parse_door_states(xml: str) -> list[IntegritiDoorStatus]:
 
 
 def parse_area_states(xml: str) -> list[IntegritiAreaStatus]:
-    """Parse standalone AreaState/EntityState rows."""
+    """Parse standalone AreaState or polymorphic EntityState rows."""
     try:
         root = ET.fromstring(xml)
     except ET.ParseError as err:
         raise IntegritiParseError(f"Invalid AreaState XML: {err}") from err
 
     result: list[IntegritiAreaStatus] = []
-    for item in _rows(root, "AreaState"):
-        state_raw = _direct_text(item, "State") or _text(item, "State")
+    for item in _state_rows(root, "AreaState"):
+        state_raw = _direct_text(
+            item, "State", "Value", "AState", "DisplayValue"
+        ) or _text(item, "State", "Value", "AState", "DisplayValue")
         entry_raw = _direct_text(item, "EntryState") or _text(item, "EntryState")
         exit_raw = _direct_text(item, "ExitState") or _text(item, "ExitState")
+        entity_value = _reference_value(item, "Entity", expected_type="Area")
         result.append(
             IntegritiAreaStatus(
-                entity_id=_reference_id(item, "Entity", expected_type="Area")
+                entity_id=entity_value
                 or _direct_text(item, "AreaID", "AreaId", "EntityID", "EntityId"),
                 row_id=_attribute(item, "ID", "Id")
                 or _direct_text(item, "ID", "Id"),
                 address=_attribute(item, "Address")
                 or _direct_text(item, "Address", "EntityAddress"),
+                name=_direct_text(item, "Summary", "Name", "DisplayName"),
                 state=_area_state(state_raw),
                 state_raw=state_raw,
                 holdup=_bool(_text(item, "Holdup")),

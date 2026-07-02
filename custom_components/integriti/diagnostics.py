@@ -30,6 +30,9 @@ async def async_get_config_entry_diagnostics(
         "doors": [
             {
                 "unique_id": door.unique_id,
+                "control_id": door.control_id,
+                "state_id": door.state_id,
+                "name": door.name,
                 "address": door.address,
                 "controller_id": door.controller_id,
                 "state": door.state_raw,
@@ -46,6 +49,9 @@ async def async_get_config_entry_diagnostics(
         "areas": [
             {
                 "unique_id": area.unique_id,
+                "control_id": area.control_id,
+                "state_id": area.state_id,
+                "name": area.name,
                 "address": area.address,
                 "controller_id": area.controller_id,
                 "state": area.state_raw,

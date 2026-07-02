@@ -106,3 +106,40 @@ def test_parse_area_state_reference() -> None:
     """
     area = parse_areas(xml)[0]
     assert area.state_id == "area-state-1"
+
+
+def test_parse_generic_entity_state_with_value_and_summary():
+    xml = """
+    <Results Count="2" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+      <EntityState xsi:type="DoorState" ID="door-state-1">
+        <Entity><Ref Type="Door" Address="D38" /></Entity>
+        <Summary>Workshop Entry</Summary>
+        <Value>1</Value><IsOpen>false</IsOpen><IsOverrideOn>false</IsOverrideOn>
+      </EntityState>
+      <EntityState xsi:type="AreaState" ID="area-state-1">
+        <Entity><Ref Type="Area" ID="area-1" /></Entity>
+        <Summary>Workshop</Summary>
+        <Value>0</Value><Siren>false</Siren><UserCount>2</UserCount>
+      </EntityState>
+    </Results>
+    """
+    door = parse_door_states(xml)[0]
+    area = parse_area_states(xml)[0]
+    assert door.entity_id == "D38"
+    assert door.name == "Workshop Entry"
+    assert door.state == 1
+    assert area.entity_id == "area-1"
+    assert area.name == "Workshop"
+    assert area.state == 0
+
+
+def test_parse_area_summary_name():
+    xml = """
+    <Results><Area ID="area-guid" Address="A01">
+      <Summary>Main Building</Summary>
+      <State><Ref Type="AreaState" ID="state-guid" /></State>
+    </Area></Results>
+    """
+    area = parse_areas(xml)[0]
+    assert area.name == "Main Building"
+    assert area.state_id == "state-guid"

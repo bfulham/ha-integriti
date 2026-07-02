@@ -59,11 +59,11 @@ class IntegritiDoorOverrideSelect(IntegritiDoorEntity, SelectEntity):
         if door is None:
             raise HomeAssistantError("Door is not available")
         if option == DOOR_OVERRIDE_NORMAL:
-            await self.coordinator.client.async_remove_door_override(door.address)
+            await self.coordinator.client.async_remove_door_override(door.control_id)
         elif option == DOOR_OVERRIDE_LOCKED:
-            await self.coordinator.client.async_override_door(door.address, locked=True)
+            await self.coordinator.client.async_override_door(door.control_id, locked=True)
         elif option == DOOR_OVERRIDE_UNLOCKED:
-            await self.coordinator.client.async_override_door(door.address, locked=False)
+            await self.coordinator.client.async_override_door(door.control_id, locked=False)
         else:
             raise HomeAssistantError(f"Unsupported override mode: {option}")
-        await self.coordinator.async_request_refresh()
+        await self.coordinator.async_refresh_after_command()
