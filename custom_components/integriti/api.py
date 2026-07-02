@@ -75,6 +75,9 @@ class IntegritiClient:
     _xml_control_id_cache: dict[tuple[str, str], str] = field(
         default_factory=dict, init=False, repr=False
     )
+    _unavailable_id_lookup_routes: set[tuple[str, str]] = field(
+        default_factory=set, init=False, repr=False
+    )
 
     @property
     def headers(self) -> dict[str, str]:
@@ -122,7 +125,7 @@ class IntegritiClient:
                         return None
                     if response.status == 401:
                         raise IntegritiAuthenticationError(
-                            "The Integriti API key was rejected"
+                            f"Integriti returned HTTP 401 for {method} {path}"
                         )
                     if response.status == 403:
                         excerpt = body.replace("\r", " ").replace("\n", " ")[:500]
@@ -663,6 +666,9 @@ class IntegritiClient:
             params: dict[str, str | int | bool] | None = None,
             data: bytes | None = None,
         ) -> None:
+            route_key = (method, path)
+            if route_key in self._unavailable_id_lookup_routes:
+                return
             try:
                 body = await self._request(
                     method,
@@ -670,10 +676,11 @@ class IntegritiClient:
                     params=params,
                     data=data,
                     content_type="application/xml" if data is not None else None,
-                    allow_statuses=(400, 403, 404, 405),
+                    # These are optional discovery routes. Some Integriti builds
+                    # return 401 for a route the same API key is not permitted to
+                    # use, even though the key remains valid for status and control.
+                    allow_statuses=(400, 401, 403, 404, 405),
                 )
-            except IntegritiAuthenticationError:
-                raise
             except IntegritiError as err:
                 _LOGGER.debug(
                     "Integriti ID resolution request %s %s failed: %s",
@@ -682,8 +689,10 @@ class IntegritiClient:
                     err,
                 )
                 return
-            if body:
-                responses.append((path, body))
+            if body is None:
+                self._unavailable_id_lookup_routes.add(route_key)
+                return
+            responses.append((path, body))
 
         quoted_address = quote(address, safe="")
         for prefix in (BASIC_STATUS_PATH, USER_PATH):
@@ -812,12 +821,13 @@ class IntegritiClient:
             "Sending Integriti XML control payload: %s",
             payload.decode("utf-8", errors="replace"),
         )
-        # XML_ControlAsync waits for Integriti to process the action and returns
-        # a useful failure response. XML_Control can otherwise acknowledge an
-        # unresolved action before it has actually been processed.
+        # Match the exact v2 route casing used by Inner Range's Postman
+        # collection. Try the asynchronous endpoint first for a useful action
+        # result, then the immediate endpoint as a compatibility fallback.
+        authentication_error: IntegritiAuthenticationError | None = None
         for endpoint in (
-            f"{BASIC_STATUS_PATH}/XML_ControlAsync",
-            f"{BASIC_STATUS_PATH}/XML_Control",
+            f"{BASIC_STATUS_PATH}/xml_controlAsync",
+            f"{BASIC_STATUS_PATH}/xml_control",
         ):
             try:
                 result = await self._request(
@@ -827,6 +837,12 @@ class IntegritiClient:
                     content_type="application/xml",
                     allow_statuses=(404, 405),
                 )
+            except IntegritiAuthenticationError as err:
+                # A key can be valid for polling and GrantAccess while one XML
+                # control route is disabled. Try the other documented route
+                # before reporting the endpoint-specific authentication failure.
+                authentication_error = err
+                continue
             except IntegritiPermissionError as err:
                 permission_error = err
                 continue
@@ -835,6 +851,12 @@ class IntegritiClient:
                 return
         if permission_error is not None:
             raise permission_error
+        if authentication_error is not None:
+            raise IntegritiPermissionError(
+                "The API key is valid for Integriti status requests, but the "
+                "XML control endpoint rejected API-key authentication. Check "
+                "the API key's Basic Status and Control permissions."
+            ) from authentication_error
         raise IntegritiResponseError("No supported XML control endpoint was found")
 
     @staticmethod

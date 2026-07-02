@@ -2,24 +2,19 @@
 
 A local Home Assistant integration for Inner Range Integriti using the REST API with **API-key-only authentication**.
 
-## v0.1.5
+## v0.1.6
 
-This release fixes DoorAction and AreaAction target resolution on servers that expose doors and areas by addresses such as `D38` and `A47` but omit the long Integriti database object ID from the normal discovery response.
+This release fixes a false “API key rejected” error when normal DoorAction or AreaAction control attempted optional database-ID lookup routes.
 
 ### Control fixes
 
-- Database IDs are now resolved through several compatible API paths:
-  - Direct full-object lookup
-  - Address-filtered GET lookup
-  - The documented `GetFilteredEntities` AggregateExpression
-  - DoorState or AreaState entity references
-- Additional ID field names such as `EntityID`, `ObjectID`, and `DatabaseID` are recognised.
-- XML control now tries `/XML_ControlAsync` first so Integriti can report an unresolved or failed action instead of the integration accepting an immediate acknowledgement.
-- If a server does not expose the long object ID, the integration falls back to the alternate Address-based reference formats used by some Integriti serializers.
-- Grant Access uses the dedicated `/GrantAccess/{door}` endpoint first and sends an explicit XML content type and XML declaration.
-- Normal lock and unlock remain XML DoorActions; only the override select applies a persistent door override.
-- Area arm and disarm remain XML AreaActions.
-- State refreshes run immediately and again after approximately 1, 3, and 7 seconds after a successful command.
+- HTTP 401 from optional ID-resolution routes is now treated as “route unavailable”, not as a rejected API key.
+- The integration continues to the XML control request using any discovered object ID or the compatible address reference fallbacks.
+- Unavailable resolver routes are cached so they are not retried for every command.
+- XML control now uses the exact lowercase route names from Inner Range's official Postman collection: `/xml_controlAsync` and `/xml_control`.
+- If the actual XML control endpoint rejects API-key authentication, Home Assistant now reports a control-permission error instead of incorrectly starting API-key reauthentication.
+- Grant Access and persistent override behavior are unchanged.
+- Immediate and delayed state refreshes after commands remain enabled.
 
 ## Installation with HACS
 
