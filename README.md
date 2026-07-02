@@ -2,18 +2,20 @@
 
 A local Home Assistant integration for Inner Range Integriti using the REST API with **API-key-only authentication**.
 
-## v0.1.6
+## v0.1.7
 
-This release fixes a false “API key rejected” error when normal DoorAction or AreaAction control attempted optional database-ID lookup routes.
+This release corrects one-shot XML DoorAction and AreaAction command generation.
 
-### Control fixes
+### Control fix
 
-- HTTP 401 from optional ID-resolution routes is now treated as “route unavailable”, not as a rejected API key.
-- The integration continues to the XML control request using any discovered object ID or the compatible address reference fallbacks.
-- Unavailable resolver routes are cached so they are not retried for every command.
-- XML control now uses the exact lowercase route names from Inner Range's official Postman collection: `/xml_controlAsync` and `/xml_control`.
-- If the actual XML control endpoint rejects API-key authentication, Home Assistant now reports a control-permission error instead of incorrectly starting API-key reauthentication.
-- Grant Access and persistent override behavior are unchanged.
+- `OnAssert` now contains the requested action.
+- `OnDeAssert` is now always `0` (`No Action`) for REST XML control.
+- Area arm: `OnAssert=1`, `OnDeAssert=0`.
+- Area disarm: `OnAssert=2`, `OnDeAssert=0`.
+- Door lock: `OnAssert=1`, `OnDeAssert=0`.
+- Door unlock: `OnAssert=2`, `OnDeAssert=0`.
+- DoorAction grant-access fallback: `OnAssert=3`, `OnDeAssert=0`.
+- Dedicated Grant Access and persistent override controls are unchanged.
 - Immediate and delayed state refreshes after commands remain enabled.
 
 ## Installation with HACS

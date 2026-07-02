@@ -916,12 +916,15 @@ class IntegritiClient:
         target_id = await self._async_resolve_xml_control_id(
             "Door", door.address, door.xml_control_id
         )
+        # REST XML control executes the asserted side of the action once.
+        # OnDeAssert must be 0 (No Action); setting it to the opposite command
+        # causes Integriti to treat the payload as a paired assert/deassert action.
         if action == "lock":
-            on_assert, on_deassert = 1, 2
+            on_assert, on_deassert = 1, 0
         elif action == "unlock":
-            on_assert, on_deassert = 2, 1
+            on_assert, on_deassert = 2, 0
         elif action == "grant_access":
-            on_assert, on_deassert = 3, 2
+            on_assert, on_deassert = 3, 0
         else:
             raise ValueError(f"Unsupported Integriti door action: {action}")
 
@@ -1003,7 +1006,9 @@ class IntegritiClient:
         root = ET.Element("AreaAction", {"ID": action_id})
         ET.SubElement(root, "ID").text = action_id
         ET.SubElement(root, "OnAssert").text = "1" if arm else "2"
-        ET.SubElement(root, "OnDeAssert").text = "2" if arm else "1"
+        # A REST control request is a one-shot assert. The working Integriti
+        # payload uses 0 (No Action) for the deassert side.
+        ET.SubElement(root, "OnDeAssert").text = "0"
         ET.SubElement(root, "InvertQualifier").text = "False"
         ET.SubElement(root, "WaitUntilComplete").text = "False"
         entity = ET.SubElement(root, "Entity")
