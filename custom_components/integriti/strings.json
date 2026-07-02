@@ -1,0 +1,61 @@
+{
+  "title": "Inner Range Integriti",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to Integriti",
+        "description": "Connect using an Integriti REST API key. No username or password is used.",
+        "data": {
+          "host": "Host",
+          "port": "Port",
+          "use_ssl": "Use HTTPS",
+          "verify_ssl": "Verify SSL certificate",
+          "api_path": "REST API path",
+          "api_key": "API key"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Update Integriti API key",
+        "description": "Enter a replacement API key.",
+        "data": {
+          "api_key": "API key"
+        }
+      },
+      "reconfigure": {
+        "title": "Reconfigure Integriti",
+        "description": "Update the Integriti server connection.",
+        "data": {
+          "host": "Host",
+          "port": "Port",
+          "use_ssl": "Use HTTPS",
+          "verify_ssl": "Verify SSL certificate",
+          "api_path": "REST API path",
+          "api_key": "API key"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Unable to connect to Integriti.",
+      "invalid_auth": "The API key was rejected or lacks permission.",
+      "invalid_response": "Integriti returned an unexpected response."
+    },
+    "abort": {
+      "already_configured": "This Integriti server is already configured.",
+      "reauth_successful": "The API key was updated successfully.",
+      "reconfigure_successful": "The Integriti connection was updated successfully."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Integriti options",
+        "data": {
+          "scan_interval": "State refresh interval (seconds)",
+          "grant_access_seconds": "Default grant-access duration (seconds)",
+          "enable_door_control": "Enable door control",
+          "enable_area_control": "Enable area arm/disarm control"
+        }
+      }
+    }
+  }
+}

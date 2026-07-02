@@ -1,0 +1,14 @@
+{
+  "domain": "integriti",
+  "name": "Inner Range Integriti",
+  "version": "0.1.0",
+  "codeowners": [
+    "@bfulham"
+  ],
+  "config_flow": true,
+  "documentation": "https://github.com/bfulham/ha-integriti",
+  "issue_tracker": "https://github.com/bfulham/ha-integriti/issues",
+  "integration_type": "hub",
+  "iot_class": "local_polling",
+  "requirements": []
+}
