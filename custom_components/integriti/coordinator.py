@@ -15,6 +15,7 @@ from .api import (
     IntegritiClient,
     IntegritiConnectionError,
     IntegritiError,
+    IntegritiPermissionError,
 )
 from .const import DOMAIN
 from .models import IntegritiData
@@ -44,13 +45,17 @@ class IntegritiCoordinator(DataUpdateCoordinator[IntegritiData]):
 
     async def _async_update_data(self) -> IntegritiData:
         try:
-            api_info = await self.client.async_get_api_info()
+            # ApiVersion is not granted to every API-key role, so it must not
+            # prevent otherwise valid Basic Status access from loading.
+            api_info = await self.client.async_get_api_info(optional=True)
             doors = await self.client.async_get_doors()
             areas = await self.client.async_get_areas()
         except IntegritiAuthenticationError as err:
             raise ConfigEntryAuthFailed(str(err)) from err
         except IntegritiConnectionError as err:
             raise UpdateFailed(str(err)) from err
+        except IntegritiPermissionError as err:
+            raise UpdateFailed(f"Integriti API permission denied: {err}") from err
         except IntegritiError as err:
             raise UpdateFailed(f"Integriti update failed: {err}") from err
 

@@ -18,6 +18,7 @@ from .api import (
     IntegritiClient,
     IntegritiConnectionError,
     IntegritiError,
+    IntegritiPermissionError,
 )
 from .const import (
     CONF_API_KEY,
@@ -68,7 +69,14 @@ async def _validate(hass: HomeAssistant, data: dict[str, Any]) -> None:
         api_key=data[CONF_API_KEY],
         verify_ssl=data[CONF_VERIFY_SSL],
     )
-    await client.async_get_api_info()
+    # ApiVersion may be forbidden for an otherwise valid API-key role.
+    await client.async_get_api_info(optional=True)
+    doors = await client.async_get_doors()
+    areas = await client.async_get_areas()
+    if not doors and not areas:
+        raise IntegritiPermissionError(
+            "The API key cannot read any Door or Area entities"
+        )
 
 
 def _connection_schema(defaults: dict[str, Any]) -> vol.Schema:
@@ -109,6 +117,8 @@ class IntegritiConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 await _validate(self.hass, user_input)
             except IntegritiAuthenticationError:
                 errors["base"] = "invalid_auth"
+            except IntegritiPermissionError:
+                errors["base"] = "insufficient_permissions"
             except IntegritiConnectionError:
                 errors["base"] = "cannot_connect"
             except IntegritiError:
@@ -143,6 +153,8 @@ class IntegritiConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 await _validate(self.hass, new_data)
             except IntegritiAuthenticationError:
                 errors["base"] = "invalid_auth"
+            except IntegritiPermissionError:
+                errors["base"] = "insufficient_permissions"
             except IntegritiConnectionError:
                 errors["base"] = "cannot_connect"
             except IntegritiError:
@@ -168,6 +180,8 @@ class IntegritiConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 await _validate(self.hass, user_input)
             except IntegritiAuthenticationError:
                 errors["base"] = "invalid_auth"
+            except IntegritiPermissionError:
+                errors["base"] = "insufficient_permissions"
             except IntegritiConnectionError:
                 errors["base"] = "cannot_connect"
             except IntegritiError:

@@ -48,6 +48,10 @@ class IntegritiAuthenticationError(IntegritiError):
     """The API key was rejected."""
 
 
+class IntegritiPermissionError(IntegritiError):
+    """The API key is valid but lacks permission for a request."""
+
+
 class IntegritiConnectionError(IntegritiError):
     """The Integriti server could not be reached."""
 
@@ -111,9 +115,14 @@ class IntegritiClient:
                             response.status,
                         )
                         return None
-                    if response.status in (401, 403):
+                    if response.status == 401:
                         raise IntegritiAuthenticationError(
-                            "The Integriti API key was rejected or lacks permission"
+                            "The Integriti API key was rejected"
+                        )
+                    if response.status == 403:
+                        excerpt = body.replace("\r", " ").replace("\n", " ")[:500]
+                        raise IntegritiPermissionError(
+                            f"{method} {path} was forbidden by Integriti: {excerpt}"
                         )
                     if response.status < 200 or response.status >= 300:
                         excerpt = body.replace("\r", " ").replace("\n", " ")[:500]
@@ -126,11 +135,20 @@ class IntegritiClient:
         except (TimeoutError, aiohttp.ClientError) as err:
             raise IntegritiConnectionError(f"Unable to reach {url}: {err}") from err
 
-    async def async_get_api_info(self) -> ApiInfo:
-        """Return API and product version information."""
-        body = await self._request("GET", API_VERSION_PATH)
+    async def async_get_api_info(self, *, optional: bool = False) -> ApiInfo:
+        """Return API and product version information.
+
+        Some API-key roles can read Basic Status but are denied access to the
+        ApiVersion route.  Version information is therefore optional during
+        normal setup and polling.
+        """
+        body = await self._request(
+            "GET",
+            API_VERSION_PATH,
+            allow_statuses=(403, 404, 405) if optional else (),
+        )
         if body is None:
-            raise IntegritiResponseError("ApiVersion returned no response")
+            return ApiInfo()
         return parse_api_info(body)
 
     async def _get_all_entities_from_path(
@@ -226,7 +244,17 @@ class IntegritiClient:
                     entity_type,
                     parser,
                     optional=True,
-                    extra_params={"AdditionalProperties": "State,Controller"},
+                    extra_params={
+                        "AdditionalProperties": (
+                            "State,Controller,InsideArea,OutsideArea,"
+                            "State.State,State.Licensed,State.IsOpen,State.DOTL,"
+                            "State.SilentDOTL,State.Forced,State.ModuleMissing,"
+                            "State.RollerState,State.IsOverrideOn,State.Holdup,"
+                            "State.EntryState,State.ExitState,State.Siren,"
+                            "State.Pulse,State.Confirm,State.Defer,State.Warn,"
+                            "State.SirenHoldoff,State.UserCount"
+                        )
+                    },
                 )
                 if rows is not None and rows:
                     return rows
@@ -252,7 +280,12 @@ class IntegritiClient:
     def _door_lookup(cls, doors: list[IntegritiDoor]) -> dict[str, int]:
         lookup: dict[str, int] = {}
         for index, door in enumerate(doors):
-            for value in (door.unique_id, door.control_id, door.address):
+            for value in (
+                door.unique_id,
+                door.control_id,
+                door.address,
+                door.state_id,
+            ):
                 key = cls._normalise_key(value)
                 if key:
                     lookup[key] = index
@@ -262,7 +295,12 @@ class IntegritiClient:
     def _area_lookup(cls, areas: list[IntegritiArea]) -> dict[str, int]:
         lookup: dict[str, int] = {}
         for index, area in enumerate(areas):
-            for value in (area.unique_id, area.control_id, area.address):
+            for value in (
+                area.unique_id,
+                area.control_id,
+                area.address,
+                area.state_id,
+            ):
                 key = cls._normalise_key(value)
                 if key:
                     lookup[key] = index
@@ -522,22 +560,31 @@ class IntegritiClient:
         ET.SubElement(entity, "Ref", {"Type": "Area", "ID": area.control_id})
         payload = ET.tostring(root, encoding="utf-8", xml_declaration=False)
 
+        forbidden = False
+        # The synchronous route is the generated System Designer command and
+        # requires fewer API capabilities than XML_ControlAsync on some roles.
         for endpoint in (
-            f"{BASIC_STATUS_PATH}/XML_ControlAsync",
-            f"{BASIC_STATUS_PATH}/XML_Control",
+            f"{BASIC_STATUS_PATH}/xml_control",
+            f"{BASIC_STATUS_PATH}/xml_controlAsync",
         ):
-            result = await self._request(
-                "POST",
-                endpoint,
-                data=payload,
-                allow_statuses=(400, 404, 405),
-            )
+            try:
+                result = await self._request(
+                    "POST",
+                    endpoint,
+                    data=payload,
+                    allow_statuses=(400, 404, 405),
+                )
+            except IntegritiPermissionError:
+                forbidden = True
+                continue
             if result is not None:
                 return
+        if forbidden:
+            raise IntegritiPermissionError(
+                "The API key lacks permission to execute XML area actions"
+            )
         raise IntegritiResponseError("No supported area control endpoint was found")
 
     async def async_control_area(self, area: IntegritiArea, *, arm: bool) -> None:
-        """Arm or disarm an area using the most reliable supported route."""
-        if await self._async_control_area_legacy(area, arm=arm):
-            return
+        """Arm or disarm an area through the API-key-capable v2 route."""
         await self._async_control_area_v2(area, arm=arm)

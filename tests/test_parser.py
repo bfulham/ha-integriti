@@ -80,3 +80,29 @@ def test_parse_standalone_area_state():
     assert status.exit_state is True
     assert status.warn is True
     assert status.user_count == 3
+
+
+def test_parse_door_state_reference() -> None:
+    xml = """
+    <Results Count="1" PageNumber="1" PageSize="1">
+      <Door ID="door-1" Address="D01">
+        <Name>Front Door</Name>
+        <State><Ref Type="DoorState" ID="door-state-1" /></State>
+      </Door>
+    </Results>
+    """
+    door = parse_doors(xml)[0]
+    assert door.state_id == "door-state-1"
+
+
+def test_parse_area_state_reference() -> None:
+    xml = """
+    <Results Count="1" PageNumber="1" PageSize="1">
+      <Area ID="area-1" Address="A01">
+        <Name>Office</Name>
+        <State><Ref Type="AreaState" ID="area-state-1" /></State>
+      </Area>
+    </Results>
+    """
+    area = parse_areas(xml)[0]
+    assert area.state_id == "area-state-1"

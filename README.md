@@ -2,7 +2,7 @@
 
 Experimental native-style Home Assistant integration for the Inner Range Integriti REST API.
 
-## v0.1.1 features
+## v0.1.2 features
 
 - UI config flow with **API-key-only authentication**
 - Multiple Integriti servers
@@ -79,9 +79,9 @@ logger:
 
 MIT
 
-## v0.1.1 state and area-control fixes
+## v0.1.2 state and area-control fixes
 
-Version 0.1.1 reads `DoorState` and `AreaState` as their own Basic Status
+Version 0.1.2 reads `DoorState` and `AreaState` as their own Basic Status
 entities and merges them with the Door and Area database records. Integriti
 stores current state separately from the configured object, so querying only
 `Door` and `Area` can discover the devices while leaving their states unknown.

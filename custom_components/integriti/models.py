@@ -120,6 +120,7 @@ class IntegritiDoor:
     name: str
     description: str | None = None
     controller_id: str | None = None
+    state_id: str | None = None
     state: int | None = None
     state_raw: str | None = None
     licensed: bool | None = None
@@ -164,6 +165,7 @@ class IntegritiArea:
     name: str
     description: str | None = None
     controller_id: str | None = None
+    state_id: str | None = None
     state: int | None = None
     state_raw: str | None = None
     holdup: bool | None = None

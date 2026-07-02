@@ -305,6 +305,9 @@ def parse_doors(xml: str) -> list[IntegritiDoor]:
                     item, "Controller", expected_type="Controller"
                 )
                 or _direct_text(item, "Controller", "ControllerID", "ControllerId"),
+                state_id=_reference_id(
+                    item, "State", expected_type="DoorState"
+                ),
                 state=_door_state(state_raw),
                 state_raw=state_raw,
                 licensed=_bool(_text(item, "Licensed")),
@@ -359,6 +362,9 @@ def parse_areas(xml: str) -> list[IntegritiArea]:
                     item, "Controller", expected_type="Controller"
                 )
                 or _direct_text(item, "Controller", "ControllerID", "ControllerId"),
+                state_id=_reference_id(
+                    item, "State", expected_type="AreaState"
+                ),
                 state=_area_state(state_raw),
                 state_raw=state_raw,
                 holdup=_bool(_text(item, "Holdup")),

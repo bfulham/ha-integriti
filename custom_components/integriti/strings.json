@@ -36,7 +36,8 @@
     },
     "error": {
       "cannot_connect": "Unable to connect to Integriti.",
-      "invalid_auth": "The API key was rejected or lacks permission.",
+      "invalid_auth": "The API key was rejected.",
+      "insufficient_permissions": "The API key is valid but lacks permission to read Integriti Doors or Areas.",
       "invalid_response": "Integriti returned an unexpected response."
     },
     "abort": {
