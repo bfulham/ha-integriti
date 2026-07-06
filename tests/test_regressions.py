@@ -16,3 +16,19 @@ def test_status_additional_properties_request_entity_id_and_address() -> None:
     source = Path("custom_components/integriti/api.py").read_text()
     assert "Entity.ID" in source
     assert "Entity.Address" in source
+
+
+def test_optional_api_version_accepts_endpoint_401() -> None:
+    source = Path("custom_components/integriti/api.py").read_text()
+    assert "allow_statuses=(401, 403, 404, 405) if optional else ()" in source
+
+
+def test_definition_route_401_does_not_immediately_reauthenticate() -> None:
+    source = Path("custom_components/integriti/api.py").read_text()
+    assert "trying the remaining API-key routes" in source
+    assert "auth_failed_routes == attempted_routes" in source
+
+
+def test_state_route_401_is_skipped_individually() -> None:
+    source = Path("custom_components/integriti/api.py").read_text()
+    assert "trying the remaining state routes" in source

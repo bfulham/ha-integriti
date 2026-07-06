@@ -148,7 +148,10 @@ class IntegritiClient:
         body = await self._request(
             "GET",
             API_VERSION_PATH,
-            allow_statuses=(403, 404, 405) if optional else (),
+            # Some otherwise-valid API-key roles return 401 specifically for
+            # ApiVersion. Treat that endpoint as unavailable when it is only
+            # being used for optional product metadata.
+            allow_statuses=(401, 403, 404, 405) if optional else (),
         )
         if body is None:
             return ApiInfo()
@@ -315,6 +318,10 @@ class IntegritiClient:
         merged_rows: list[T] = []
         lookup: dict[str, int] = {}
         last_error: IntegritiError | None = None
+        last_auth_error: IntegritiAuthenticationError | None = None
+        attempted_routes = 0
+        successful_routes = 0
+        auth_failed_routes = 0
         additional = (
             "ID,Address,Name,DisplayName,Summary,Description,State,Controller,"
             "InsideArea,OutsideArea,State.State,State.Value,State.Licensed,"
@@ -325,6 +332,7 @@ class IntegritiClient:
             "State.SirenHoldoff,State.UserCount"
         )
         for path_prefix in (USER_PATH, BASIC_STATUS_PATH):
+            attempted_routes += 1
             try:
                 rows = await self._get_all_entities_from_path(
                     path_prefix,
@@ -333,8 +341,20 @@ class IntegritiClient:
                     optional=True,
                     extra_params={"AdditionalProperties": additional},
                 )
-            except IntegritiAuthenticationError:
-                raise
+            except IntegritiAuthenticationError as err:
+                # Integriti commonly returns 401 for a route that the API-key
+                # role is not allowed to use, while another route works with
+                # the same key. Do not trigger reauthentication until every
+                # candidate definition route rejected the key.
+                auth_failed_routes += 1
+                last_auth_error = err
+                _LOGGER.debug(
+                    "Integriti definition route %s/%s returned HTTP 401; "
+                    "trying the remaining API-key routes",
+                    path_prefix,
+                    entity_type,
+                )
+                continue
             except IntegritiError as err:
                 last_error = err
                 _LOGGER.debug(
@@ -344,6 +364,8 @@ class IntegritiClient:
                     err,
                 )
                 continue
+            if rows is not None:
+                successful_routes += 1
             if not rows:
                 continue
             for row in rows:
@@ -380,7 +402,14 @@ class IntegritiClient:
 
         if merged_rows:
             return merged_rows
-        if last_error is not None:
+        if (
+            successful_routes == 0
+            and attempted_routes > 0
+            and auth_failed_routes == attempted_routes
+            and last_auth_error is not None
+        ):
+            raise last_auth_error
+        if last_error is not None and successful_routes == 0:
             raise last_error
         return []
 
@@ -542,13 +571,25 @@ class IntegritiClient:
 
         for entity_type in (preferred_type, "EntityState"):
             for prefix in (BASIC_STATUS_PATH, USER_PATH):
-                rows = await self._get_all_entities_from_path(
-                    prefix,
-                    entity_type,
-                    parser,
-                    optional=True,
-                    extra_params={"AdditionalProperties": additional},
-                )
+                try:
+                    rows = await self._get_all_entities_from_path(
+                        prefix,
+                        entity_type,
+                        parser,
+                        optional=True,
+                        extra_params={"AdditionalProperties": additional},
+                    )
+                except IntegritiAuthenticationError:
+                    # State tables can have different permissions from Door
+                    # and Area definitions. A 401 here must not invalidate an
+                    # API key that is already working on another route.
+                    _LOGGER.debug(
+                        "Integriti state route %s/%s returned HTTP 401; "
+                        "trying the remaining state routes",
+                        prefix,
+                        entity_type,
+                    )
+                    continue
                 merge_rows(rows)
 
         merge_rows(await self._get_legacy_states(preferred_type, parser))

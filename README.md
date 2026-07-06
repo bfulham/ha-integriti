@@ -2,22 +2,26 @@
 
 A local Home Assistant integration for Inner Range Integriti using the REST API with **API-key-only authentication**.
 
-## v0.1.8
+## v0.1.9
 
-This release fixes database-ID discovery for normal DoorAction and AreaAction controls.
+This release fixes false API-key rejection and unwanted reauthentication.
 
-### Database-ID and control fixes
+### Authentication and route-permission fixes
 
-- Explicitly requests `Entity.ID` and `Entity.Address` with DoorState and AreaState.
-- Supports multiple Integriti object-reference XML shapes, including nested full `Door`/`Area` objects and typed `Entity` elements.
-- Merges state rows from `DoorState`/`AreaState` and polymorphic `EntityState` routes instead of stopping at the first non-empty response.
-- Retains the long database object ID from state references and uses it in `<Ref Type="Door|Area" ID="..." />`.
-- Does not send invalid `Address="D38"` or `ID="A47"` XML control fallbacks.
-- One-shot actions continue to use the confirmed values:
-  - Arm / lock: `OnAssert=1`, `OnDeAssert=0`
-  - Disarm / unlock: `OnAssert=2`, `OnDeAssert=0`
-- Dedicated Grant Access and persistent override controls are unchanged.
-- Immediate and delayed state refreshes after commands remain enabled.
+- `ApiVersion` returning HTTP 401 is now treated as an unavailable optional
+  metadata endpoint rather than an invalid API key.
+- Door and Area discovery no longer stops when one optional route returns 401.
+  Integriti can reject `/v2/user/...` while allowing `/v2/basicstatus/...` for
+  the same valid API key.
+- Reauthentication is only started when every usable definition route rejects
+  the API key.
+- DoorState, AreaState, and EntityState routes with separate permissions are
+  skipped individually when they return 401.
+- A valid response from any supported Door or Area definition route keeps the
+  config entry loaded.
+
+The database-ID, XML-control, Grant Access, override, and post-command refresh
+changes from v0.1.8 remain included.
 
 ## Installation with HACS
 
