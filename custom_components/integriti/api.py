@@ -480,12 +480,66 @@ class IntegritiClient:
         preferred_type: str,
         parser: Callable[[str], list[T]],
     ) -> list[T] | None:
-        """Read typed states, falling back to polymorphic EntityState."""
+        """Read and merge typed and polymorphic entity-state rows.
+
+        Some Integriti builds return the live state from ``DoorState`` or
+        ``AreaState`` but omit the referenced entity's long database ID. The
+        polymorphic ``EntityState`` route may expose that ID. Do not stop at
+        the first non-empty route; merge all API-key-permitted responses and
+        fill missing fields from each serialization.
+        """
         additional = (
-            "Entity,Summary,Name,State,Value,DisplayValue,Licensed,IsOpen,DOTL,"
-            "SilentDOTL,Forced,ModuleMissing,RollerState,IsOverrideOn,Holdup,"
-            "EntryState,ExitState,Siren,Pulse,Confirm,Defer,Warn,SirenHoldoff,UserCount"
+            "Entity,Entity.ID,Entity.EntityID,Entity.ObjectID,Entity.DatabaseID,"
+            "Entity.Address,Entity.Name,Entity.Summary,Summary,Name,State,Value,"
+            "DisplayValue,Licensed,IsOpen,DOTL,SilentDOTL,Forced,ModuleMissing,"
+            "RollerState,IsOverrideOn,Holdup,EntryState,ExitState,Siren,Pulse,"
+            "Confirm,Defer,Warn,SirenHoldoff,UserCount"
         )
+        merged: list[T] = []
+        lookup: dict[str, int] = {}
+
+        def merge_rows(rows: list[T] | None) -> None:
+            if not rows:
+                return
+            for candidate in rows:
+                keys = [
+                    self._normalise_key(getattr(candidate, field_name, None))
+                    for field_name in (
+                        "entity_object_id",
+                        "entity_id",
+                        "address",
+                        "row_id",
+                    )
+                ]
+                index = next(
+                    (lookup[key] for key in keys if key is not None and key in lookup),
+                    None,
+                )
+                if index is None:
+                    index = len(merged)
+                    merged.append(candidate)
+                else:
+                    current = merged[index]
+                    updates: dict[str, object] = {}
+                    for field_name in current.__dataclass_fields__:
+                        current_value = getattr(current, field_name)
+                        candidate_value = getattr(candidate, field_name)
+                        if current_value is None and candidate_value is not None:
+                            updates[field_name] = candidate_value
+                    if updates:
+                        merged[index] = replace(current, **updates)
+
+                current = merged[index]
+                for field_name in (
+                    "entity_object_id",
+                    "entity_id",
+                    "address",
+                    "row_id",
+                ):
+                    key = self._normalise_key(getattr(current, field_name, None))
+                    if key is not None:
+                        lookup[key] = index
+
         for entity_type in (preferred_type, "EntityState"):
             for prefix in (BASIC_STATUS_PATH, USER_PATH):
                 rows = await self._get_all_entities_from_path(
@@ -495,12 +549,11 @@ class IntegritiClient:
                     optional=True,
                     extra_params={"AdditionalProperties": additional},
                 )
-                if rows:
-                    return rows
-        rows = await self._get_legacy_states(preferred_type, parser)
-        if rows:
-            return rows
-        return await self._get_legacy_states("EntityState", parser)
+                merge_rows(rows)
+
+        merge_rows(await self._get_legacy_states(preferred_type, parser))
+        merge_rows(await self._get_legacy_states("EntityState", parser))
+        return merged or None
 
     async def async_get_doors(self) -> list[IntegritiDoor]:
         """Return all visible doors merged with current state rows."""
@@ -647,7 +700,8 @@ class IntegritiClient:
 
         additional = (
             "ID,EntityID,ObjectID,DatabaseID,Address,Name,DisplayName,"
-            "Summary,Controller,Partition,PartitionID"
+            "Summary,Controller,Partition,PartitionID,Entity,Entity.ID,"
+            "Entity.EntityID,Entity.ObjectID,Entity.DatabaseID,Entity.Address"
         )
         common_params: dict[str, str | int | bool] = {
             "query_page": 1,
@@ -747,7 +801,7 @@ class IntegritiClient:
 
         _LOGGER.warning(
             "Could not resolve the Integriti database ID for %s %s; "
-            "trying an Address-based XML reference",
+            "the server did not expose Entity.ID in any permitted status/query route",
             entity_type,
             address,
         )
@@ -928,13 +982,13 @@ class IntegritiClient:
         else:
             raise ValueError(f"Unsupported Integriti door action: {action}")
 
-        targets: list[tuple[str | None, bool]] = []
-        if target_id:
-            targets.append((target_id, False))
-        else:
-            # Different Integriti serializers accept either Address= or an
-            # address-like ID together with the Type. Try both wire shapes.
-            targets.extend(((None, False), (None, True)))
+        if not target_id:
+            raise IntegritiResponseError(
+                f"Unable to obtain the Integriti database ID for Door "
+                f"{door.address}. Download the integration diagnostics after "
+                f"a refresh so the returned state-reference shape can be checked."
+            )
+        targets: list[tuple[str | None, bool]] = [(target_id, False)]
 
         last_error: IntegritiError | None = None
         for candidate_id, address_as_id in targets:
@@ -1029,11 +1083,13 @@ class IntegritiClient:
         target_id = await self._async_resolve_xml_control_id(
             "Area", area.address, area.xml_control_id
         )
-        targets: list[tuple[str | None, bool]] = []
-        if target_id:
-            targets.append((target_id, False))
-        else:
-            targets.extend(((None, False), (None, True)))
+        if not target_id:
+            raise IntegritiResponseError(
+                f"Unable to obtain the Integriti database ID for Area "
+                f"{area.address}. Download the integration diagnostics after "
+                f"a refresh so the returned state-reference shape can be checked."
+            )
+        targets: list[tuple[str | None, bool]] = [(target_id, False)]
 
         last_error: IntegritiError | None = None
         for candidate_id, address_as_id in targets:

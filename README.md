@@ -2,19 +2,20 @@
 
 A local Home Assistant integration for Inner Range Integriti using the REST API with **API-key-only authentication**.
 
-## v0.1.7
+## v0.1.8
 
-This release corrects one-shot XML DoorAction and AreaAction command generation.
+This release fixes database-ID discovery for normal DoorAction and AreaAction controls.
 
-### Control fix
+### Database-ID and control fixes
 
-- `OnAssert` now contains the requested action.
-- `OnDeAssert` is now always `0` (`No Action`) for REST XML control.
-- Area arm: `OnAssert=1`, `OnDeAssert=0`.
-- Area disarm: `OnAssert=2`, `OnDeAssert=0`.
-- Door lock: `OnAssert=1`, `OnDeAssert=0`.
-- Door unlock: `OnAssert=2`, `OnDeAssert=0`.
-- DoorAction grant-access fallback: `OnAssert=3`, `OnDeAssert=0`.
+- Explicitly requests `Entity.ID` and `Entity.Address` with DoorState and AreaState.
+- Supports multiple Integriti object-reference XML shapes, including nested full `Door`/`Area` objects and typed `Entity` elements.
+- Merges state rows from `DoorState`/`AreaState` and polymorphic `EntityState` routes instead of stopping at the first non-empty response.
+- Retains the long database object ID from state references and uses it in `<Ref Type="Door|Area" ID="..." />`.
+- Does not send invalid `Address="D38"` or `ID="A47"` XML control fallbacks.
+- One-shot actions continue to use the confirmed values:
+  - Arm / lock: `OnAssert=1`, `OnDeAssert=0`
+  - Disarm / unlock: `OnAssert=2`, `OnDeAssert=0`
 - Dedicated Grant Access and persistent override controls are unchanged.
 - Immediate and delayed state refreshes after commands remain enabled.
 

@@ -230,3 +230,47 @@ def test_parse_entity_id_element_as_xml_control_id() -> None:
     """
     area = parse_areas(xml)[0]
     assert area.xml_control_id == "4785078899048449"
+
+
+def test_parse_area_state_nested_full_entity_reference() -> None:
+    xml = """
+    <Results Count="1">
+      <AreaState ID="area-state-47">
+        <Entity>
+          <Area ID="4503603922337839">
+            <Address>A47</Address>
+            <Name>Main Building</Name>
+          </Area>
+        </Entity>
+        <State>Disarmed</State>
+      </AreaState>
+    </Results>
+    """
+    status = parse_area_states(xml)[0]
+    assert status.entity_object_id == "4503603922337839"
+    assert status.address == "A47"
+
+
+def test_parse_door_state_generic_entity_reference() -> None:
+    xml = """
+    <Results Count="1">
+      <DoorState ID="door-state-38">
+        <Entity Type="Door" ID="5066553875759108">
+          <Address>D38</Address>
+        </Entity>
+        <State>Locked</State>
+      </DoorState>
+    </Results>
+    """
+    status = parse_door_states(xml)[0]
+    assert status.entity_object_id == "5066553875759108"
+    assert status.address == "D38"
+
+
+def test_extract_database_object_id_from_nested_area_entity() -> None:
+    xml = """
+    <Results><AreaState><Entity><Area ID="4503603922337839">
+      <Address>A47</Address>
+    </Area></Entity></AreaState></Results>
+    """
+    assert extract_database_object_id(xml, "Area", "A47") == "4503603922337839"

@@ -200,6 +200,57 @@ def _rows(root: ET.Element, entity_type: str) -> list[ET.Element]:
     return found
 
 
+def _reference_nodes(
+    node: ET.Element,
+    property_name: str,
+    *,
+    expected_type: str | None = None,
+) -> list[ET.Element]:
+    """Return plausible serialized object-reference nodes.
+
+    Integriti releases serialize DBObject references in several forms, for
+    example::
+
+        <Entity><Ref Type="Area" ID="123" Address="A1" /></Entity>
+        <Entity><Area ID="123"><Address>A1</Address></Area></Entity>
+        <Entity Type="Area" ID="123"><Address>A1</Address></Entity>
+
+    Keep the search scoped to the named property so an unrelated ID elsewhere
+    in the status row cannot be mistaken for the controlled entity ID.
+    """
+    expected = expected_type.casefold() if expected_type else None
+    properties = list(_children(node, property_name))
+    result: list[ET.Element] = []
+
+    def add(candidate: ET.Element) -> None:
+        if candidate not in result:
+            result.append(candidate)
+
+    for prop in properties:
+        add(prop)
+        for candidate in prop.iter():
+            if candidate is prop:
+                continue
+            tag_name = _local_name(candidate.tag).casefold()
+            type_attr = _attribute(candidate, "Type", "EntityType", "ObjectType")
+            type_text = _direct_text(candidate, "Type", "EntityType", "ObjectType")
+            candidate_type = (type_attr or type_text or "").rsplit(":", 1)[-1].casefold()
+            if expected is None:
+                if tag_name in {"ref", "entityref", "dbobjectref"}:
+                    add(candidate)
+                continue
+            if (
+                tag_name == expected
+                or candidate_type == expected
+                or (
+                    tag_name in {"ref", "entityref", "dbobjectref"}
+                    and (not candidate_type or candidate_type == expected)
+                )
+            ):
+                add(candidate)
+    return result
+
+
 def _reference_value(
     node: ET.Element,
     property_name: str,
@@ -207,36 +258,16 @@ def _reference_value(
     expected_type: str | None = None,
 ) -> str | None:
     """Return an ID or address from a serialized DBObject reference."""
-    expected = expected_type.casefold() if expected_type else None
-    properties = list(_children(node, property_name))
-    for prop in properties:
-        direct = _attribute(prop, "ID", "Id", "Address")
-        if direct is not None:
-            return direct
-        for ref in prop.iter():
-            if _local_name(ref.tag).casefold() != "ref":
-                continue
-            ref_type = _attribute(ref, "Type")
-            if expected and ref_type and ref_type.casefold() != expected:
-                continue
-            value = (
-                _attribute(ref, "ID", "Id", "Address")
-                or _direct_text(ref, "ID", "Id", "Address")
-            )
-            if value is not None:
-                return value
-
-    if expected:
-        for ref in node.iter():
-            if _local_name(ref.tag).casefold() != "ref":
-                continue
-            ref_type = _attribute(ref, "Type")
-            if ref_type and ref_type.casefold() == expected:
-                value = _attribute(ref, "ID", "Id", "Address")
-                if value is not None:
-                    return value
+    for candidate in _reference_nodes(
+        node, property_name, expected_type=expected_type
+    ):
+        value = (
+            _attribute(candidate, "ID", "Id", "EntityID", "EntityId", "ObjectID", "ObjectId", "DatabaseID", "DatabaseId", "Address")
+            or _direct_text(candidate, "ID", "Id", "EntityID", "EntityId", "ObjectID", "ObjectId", "DatabaseID", "DatabaseId", "Address")
+        )
+        if value is not None:
+            return value
     return None
-
 
 
 def _reference_id_only(
@@ -246,35 +277,14 @@ def _reference_id_only(
     expected_type: str | None = None,
 ) -> str | None:
     """Return only the database ID from a serialized object reference."""
-    expected = expected_type.casefold() if expected_type else None
-    properties = list(_children(node, property_name))
-    for prop in properties:
-        direct = _attribute(prop, "ID", "Id")
-        if direct is not None:
-            return direct
-        for ref in prop.iter():
-            if _local_name(ref.tag).casefold() != "ref":
-                continue
-            ref_type = _attribute(ref, "Type")
-            if expected and ref_type and ref_type.casefold() != expected:
-                continue
-            value = _attribute(ref, "ID", "Id") or _direct_text(
-                ref, "ID", "Id"
-            )
-            if value is not None:
-                return value
-
-    if expected:
-        for ref in node.iter():
-            if _local_name(ref.tag).casefold() != "ref":
-                continue
-            ref_type = _attribute(ref, "Type")
-            if ref_type and ref_type.casefold() == expected:
-                value = _attribute(ref, "ID", "Id") or _direct_text(
-                    ref, "ID", "Id"
-                )
-                if value is not None:
-                    return value
+    for candidate in _reference_nodes(
+        node, property_name, expected_type=expected_type
+    ):
+        value = _attribute(candidate, *_OBJECT_ID_NAMES) or _direct_text(
+            candidate, *_OBJECT_ID_NAMES
+        )
+        if value is not None:
+            return value
     return None
 
 
@@ -307,12 +317,7 @@ def _object_id(node: ET.Element, *, expected_type: str) -> str | None:
 def extract_database_object_id(
     xml: str, entity_type: str, address: str
 ) -> str | None:
-    """Extract an entity database ID from an arbitrary filtered API response.
-
-    Integriti has several serializers in use across releases. Some return a full
-    ``Door``/``Area`` object, while others return a ``Ref`` or wrap the object in
-    a generic result. This helper deliberately accepts all of those shapes.
-    """
+    """Extract an entity database ID from an arbitrary filtered API response."""
     try:
         root = ET.fromstring(xml)
     except ET.ParseError:
@@ -327,19 +332,19 @@ def extract_database_object_id(
             return None
         return value
 
-    # The most reliable shape is a Ref carrying both Address and ID.
-    for node in root.iter():
-        if _local_name(node.tag).casefold() != "ref":
-            continue
-        ref_type = _attribute(node, "Type")
-        if ref_type is None or ref_type.casefold() != wanted_type:
-            continue
-        ref_address = _attribute(node, "Address") or _direct_text(node, "Address")
-        if ref_address and ref_address.strip().casefold() == wanted_address:
-            if value := usable(_attribute(node, *_OBJECT_ID_NAMES)):
-                return value
-            if value := usable(_direct_text(node, *_OBJECT_ID_NAMES)):
-                return value
+    # References often carry both the human address and long database ID.
+    for property_name in ("Entity", entity_type):
+        for container in root.iter():
+            ref_address = _reference_address(
+                container, property_name, expected_type=entity_type
+            )
+            if ref_address and ref_address.strip().casefold() == wanted_address:
+                if value := usable(
+                    _reference_id_only(
+                        container, property_name, expected_type=entity_type
+                    )
+                ):
+                    return value
 
     # Prefer a full entity row whose address matches exactly.
     matching_rows: list[ET.Element] = []
@@ -357,36 +362,25 @@ def extract_database_object_id(
         if value := usable(_object_id(row, expected_type=entity_type)):
             return value
 
-    # Some filtered responses omit the Address because it was the filter key.
-    # If exactly one entity row was returned, its object ID is unambiguous.
     if len(all_rows) == 1:
         if value := usable(_object_id(all_rows[0], expected_type=entity_type)):
             return value
 
-    # Last resort: locate the exact address anywhere, then inspect its ancestors.
-    parent_map = {child: parent for parent in root.iter() for child in parent}
+    # Last resort: find a typed descendant that contains the exact address.
     for node in root.iter():
-        has_address = any(
-            _local_name(key).casefold() in {"address", "entityaddress"}
-            and str(value).strip().casefold() == wanted_address
-            for key, value in node.attrib.items()
-        )
-        if not has_address and _local_name(node.tag).casefold() in {
-            "address",
-            "entityaddress",
-        }:
-            has_address = (node.text or "").strip().casefold() == wanted_address
-        if not has_address:
+        tag_name = _local_name(node.tag).casefold()
+        type_attr = (_attribute(node, "Type", "EntityType", "ObjectType") or "").casefold()
+        if tag_name not in {wanted_type, "ref", "entityref", "dbobjectref", "entity"} and type_attr != wanted_type:
             continue
-        current: ET.Element | None = node
-        while current is not None:
-            tag_name = _local_name(current.tag).casefold()
-            type_name = (_xsi_type(current) or "").casefold()
-            if tag_name == wanted_type or type_name == wanted_type:
-                if value := usable(_object_id(current, expected_type=entity_type)):
-                    return value
-            current = parent_map.get(current)
-
+        node_address = _attribute(node, "Address", "EntityAddress") or _direct_text(
+            node, "Address", "EntityAddress"
+        )
+        if node_address and node_address.strip().casefold() == wanted_address:
+            if value := usable(
+                _attribute(node, *_OBJECT_ID_NAMES)
+                or _direct_text(node, *_OBJECT_ID_NAMES)
+            ):
+                return value
     return None
 
 
@@ -397,31 +391,14 @@ def _reference_address(
     expected_type: str | None = None,
 ) -> str | None:
     """Return only the address from a serialized object reference."""
-    expected = expected_type.casefold() if expected_type else None
-    properties = list(_children(node, property_name))
-    for prop in properties:
-        direct = _attribute(prop, "Address")
-        if direct is not None:
-            return direct
-        for ref in prop.iter():
-            if _local_name(ref.tag).casefold() != "ref":
-                continue
-            ref_type = _attribute(ref, "Type")
-            if expected and ref_type and ref_type.casefold() != expected:
-                continue
-            value = _attribute(ref, "Address") or _direct_text(ref, "Address")
-            if value is not None:
-                return value
-
-    if expected:
-        for ref in node.iter():
-            if _local_name(ref.tag).casefold() != "ref":
-                continue
-            ref_type = _attribute(ref, "Type")
-            if ref_type and ref_type.casefold() == expected:
-                value = _attribute(ref, "Address") or _direct_text(ref, "Address")
-                if value is not None:
-                    return value
+    for candidate in _reference_nodes(
+        node, property_name, expected_type=expected_type
+    ):
+        value = _attribute(candidate, "Address", "EntityAddress") or _direct_text(
+            candidate, "Address", "EntityAddress"
+        )
+        if value is not None:
+            return value
     return None
 
 
