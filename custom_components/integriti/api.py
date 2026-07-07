@@ -724,7 +724,7 @@ class IntegritiClient:
         self,
         entity_type: str,
         address: str,
-        known_id: str | None,
+        *known_ids: str | None,
     ) -> str | None:
         """Resolve the long Integriti database ID used by action references.
 
@@ -732,8 +732,14 @@ class IntegritiClient:
         single-object route, an Address-filtered GET, the documented POST
         filter, and finally the state table that references the entity.
         """
-        if usable := self._usable_xml_control_id(known_id, address):
-            return usable
+        # Try every ID we already have before making optional lookup calls.
+        # Integriti status responses on some systems expose the long object ID
+        # as the State reference ID, while the entity object itself is only
+        # exposed as the short address (for example A47/D38). That long value
+        # is the ID accepted by AreaAction/DoorAction XML references.
+        for known_id in known_ids:
+            if usable := self._usable_xml_control_id(known_id, address):
+                return usable
 
         cache_key = (entity_type.casefold(), address.casefold())
         if cached := self._xml_control_id_cache.get(cache_key):
@@ -1009,7 +1015,7 @@ class IntegritiClient:
                 )
 
         target_id = await self._async_resolve_xml_control_id(
-            "Door", door.address, door.xml_control_id
+            "Door", door.address, door.xml_control_id, door.state_id
         )
         # REST XML control executes the asserted side of the action once.
         # OnDeAssert must be 0 (No Action); setting it to the opposite command
@@ -1122,7 +1128,7 @@ class IntegritiClient:
     async def async_control_area(self, area: IntegritiArea, *, arm: bool) -> None:
         """Arm or disarm an area through an XML AreaAction."""
         target_id = await self._async_resolve_xml_control_id(
-            "Area", area.address, area.xml_control_id
+            "Area", area.address, area.xml_control_id, area.state_id
         )
         if not target_id:
             raise IntegritiResponseError(

@@ -2,26 +2,20 @@
 
 A local Home Assistant integration for Inner Range Integriti using the REST API with **API-key-only authentication**.
 
-## v0.1.9
+## v0.1.10
 
-This release fixes false API-key rejection and unwanted reauthentication.
+This release fixes normal DoorAction and AreaAction control on systems where the API-key status response exposes the short Integriti address as `xml_control_id` and the long numeric object ID as `state_id`.
 
-### Authentication and route-permission fixes
+### Control fixes
 
-- `ApiVersion` returning HTTP 401 is now treated as an unavailable optional
-  metadata endpoint rather than an invalid API key.
-- Door and Area discovery no longer stops when one optional route returns 401.
-  Integriti can reject `/v2/user/...` while allowing `/v2/basicstatus/...` for
-  the same valid API key.
-- Reauthentication is only started when every usable definition route rejects
-  the API key.
-- DoorState, AreaState, and EntityState routes with separate permissions are
-  skipped individually when they return 401.
-- A valid response from any supported Door or Area definition route keeps the
-  config entry loaded.
-
-The database-ID, XML-control, Grant Access, override, and post-command refresh
-changes from v0.1.8 remain included.
+- Door Lock and Unlock now try `door.state_id` as the XML control reference when `door.xml_control_id` is only the short address such as `D38`.
+- Area Arm and Disarm now try `area.state_id` as the XML control reference when `area.xml_control_id` is only the short address such as `A47`.
+- Keeps the one-shot XML action format confirmed from Integriti:
+  - Arm / Lock: `OnAssert=1`, `OnDeAssert=0`
+  - Disarm / Unlock: `OnAssert=2`, `OnDeAssert=0`
+- Grant Access still uses the dedicated API endpoint first.
+- Persistent Door Override remains separate and is only used by the override select.
+- The false optional-route API-key failures fixed in v0.1.9 remain fixed.
 
 ## Installation with HACS
 

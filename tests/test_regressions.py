@@ -32,3 +32,9 @@ def test_definition_route_401_does_not_immediately_reauthenticate() -> None:
 def test_state_route_401_is_skipped_individually() -> None:
     source = Path("custom_components/integriti/api.py").read_text()
     assert "trying the remaining state routes" in source
+
+
+def test_xml_control_resolution_uses_state_id_fallback() -> None:
+    source = Path("custom_components/integriti/api.py").read_text()
+    assert '"Door", door.address, door.xml_control_id, door.state_id' in source
+    assert '"Area", area.address, area.xml_control_id, area.state_id' in source
